@@ -18,7 +18,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .chat_contract import (
     ChatTurn,
-    OpenAIContractError as OpenAIHTTPError,
     completion_payload,
     openai_error_payload,
     prepare_chat_turn,
@@ -29,6 +28,9 @@ from .chat_contract import (
     stream_error_payload,
     stream_start_payload,
     stream_stop_payload,
+)
+from .chat_contract import (
+    OpenAIContractError as OpenAIHTTPError,
 )
 from .codex_client import (
     CodexAppServer,
@@ -126,7 +128,9 @@ def create_app(settings: ShimSettings) -> FastAPI:
         try:
             body = await request.json()
         except json.JSONDecodeError:
-            return _openai_error_response(400, "Request body must be valid JSON.", "invalid_request_error", "invalid_json")
+            return _openai_error_response(
+                400, "Request body must be valid JSON.", "invalid_request_error", "invalid_json"
+            )
         turn = prepare_chat_turn(body)
 
         if bool(body.get("stream")):
@@ -230,8 +234,7 @@ def main(argv: list[str] | None = None) -> None:
     settings = _settings_from_args(argv)
     if settings.generated_token:
         print(
-            "Generated a local shim token for this process. Use it as the OpenAI SDK api_key: "
-            f"{settings.token}",
+            f"Generated a local shim token for this process. Use it as the OpenAI SDK api_key: {settings.token}",
             flush=True,
         )
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="warning")

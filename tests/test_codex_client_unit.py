@@ -167,7 +167,9 @@ def test_redacts_common_secret_shapes_and_builds_helpers() -> None:
     assert "access_token=[redacted]" in _redact("access_token=abc")
     assert "refresh-token: [redacted]" in _redact("refresh-token: abc")
     assert build_text_input("hi") == [{"type": "text", "text": "hi", "text_elements": []}]
-    assert openai_usage_from_codex({"last": {"inputTokens": 1, "outputTokens": 2, "totalTokens": 3}})["total_tokens"] == 3
+    assert (
+        openai_usage_from_codex({"last": {"inputTokens": 1, "outputTokens": 2, "totalTokens": 3}})["total_tokens"] == 3
+    )
     assert openai_usage_from_codex({"total": {"inputTokens": 4, "outputTokens": 5}})["total_tokens"] == 9
 
 

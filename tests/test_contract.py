@@ -13,7 +13,6 @@ import uvicorn
 
 from codex_openai_shim.server import ShimSettings, create_app
 
-
 TEST_TOKEN = "local-contract-test-token"
 RUN_CONTRACT_TESTS_ENV = "CODEX_SHIM_RUN_CONTRACT_TESTS"
 

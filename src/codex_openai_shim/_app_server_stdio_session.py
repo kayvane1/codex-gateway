@@ -179,8 +179,7 @@ class AppServerStdioSession:
             await process.wait()
         self._fail_pending(
             CodexAppServerError(
-                f"Codex app-server exited unexpectedly with code {process.returncode}. "
-                f"Recent stderr: {list(self._stderr_tail)}"
+                f"Codex app-server exited unexpectedly with code {process.returncode}. Recent stderr: {list(self._stderr_tail)}"
             )
         )
 

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
-from codex_openai_shim.codex_client import CodexAppServerError, CodexChatResult
+from codex_openai_shim import server
 from codex_openai_shim.chat_contract import (
     _extract_content_parts,
     _extract_text_content,
@@ -15,7 +14,7 @@ from codex_openai_shim.chat_contract import (
     _validate_chat_body,
     sse,
 )
-from codex_openai_shim import server
+from codex_openai_shim.codex_client import CodexAppServerError, CodexChatResult
 from codex_openai_shim.server import (
     OpenAIHTTPError,
     ShimSettings,
@@ -136,10 +135,7 @@ def test_message_conversion_accepts_only_text_chat() -> None:
     )
 
     assert instructions == (
-        "Caller-supplied system message:\n"
-        "system instruction\n\n"
-        "Caller-supplied developer message:\n"
-        "developer instruction"
+        "Caller-supplied system message:\nsystem instruction\n\nCaller-supplied developer message:\ndeveloper instruction"
     )
     assert "Do not execute" not in instructions
     assert "OpenAI compatibility request" not in instructions
@@ -165,9 +161,9 @@ def test_message_conversion_accepts_only_text_chat() -> None:
         _messages_to_codex_history_and_input([{"role": "assistant", "content": "prefill"}])
     assert assistant_last.value.code == "unsupported_message_sequence"
 
-    assert _extract_content_parts([{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA==", "detail": "high"}}], 0) == [
-        {"type": "image_url", "image_url": "data:image/png;base64,AA==", "detail": "high"}
-    ]
+    assert _extract_content_parts(
+        [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA==", "detail": "high"}}], 0
+    ) == [{"type": "image_url", "image_url": "data:image/png;base64,AA==", "detail": "high"}]
     with pytest.raises(OpenAIHTTPError) as image_in_text_only:
         _extract_text_content([{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}], 0)
     assert image_in_text_only.value.code == "unsupported_content_part"
@@ -178,7 +174,9 @@ def test_message_conversion_accepts_only_text_chat() -> None:
         _extract_content_parts([{"type": "image_url", "image_url": {"url": "file:///private/tmp/image.png"}}], 0)
     assert local_image_url.value.code == "invalid_image_url"
     with pytest.raises(OpenAIHTTPError) as bad_detail:
-        _extract_content_parts([{"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "original"}}], 0)
+        _extract_content_parts(
+            [{"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "original"}}], 0
+        )
     assert bad_detail.value.code == "unsupported_image_detail"
 
     with pytest.raises(OpenAIHTTPError) as bad_content:
@@ -227,7 +225,10 @@ def test_image_messages_become_codex_inputs_and_history() -> None:
     with pytest.raises(OpenAIHTTPError) as assistant_image:
         _messages_to_codex_history_and_input(
             [
-                {"role": "assistant", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}],
+                },
                 {"role": "user", "content": "next"},
             ]
         )
@@ -248,7 +249,9 @@ def test_http_auth_rejects_missing_token(endpoint: str) -> None:
             if endpoint.endswith("models"):
                 response = await client.get(endpoint)
             else:
-                response = await client.post(endpoint, json={"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+                response = await client.post(
+                    endpoint, json={"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+                )
         assert response.status_code == 401
         assert response.json()["error"]["type"] == "authentication_error"
 

@@ -173,7 +173,9 @@ def _messages_to_codex_history_and_input(
 
     for index, message in enumerate(messages):
         if not isinstance(message, dict):
-            raise_openai_error(400, f"`messages[{index}]` must be an object.", "invalid_request_error", "invalid_messages")
+            raise_openai_error(
+                400, f"`messages[{index}]` must be an object.", "invalid_request_error", "invalid_messages"
+            )
         role = message.get("role")
         content_parts = _extract_content_parts(message.get("content"), index)
 
@@ -199,7 +201,10 @@ def _messages_to_codex_history_and_input(
             "unsupported_message_sequence",
         )
 
-    history_items = [_message_to_response_item(role, content_parts, index) for index, (role, content_parts) in enumerate(dialogue[:-1])]
+    history_items = [
+        _message_to_response_item(role, content_parts, index)
+        for index, (role, content_parts) in enumerate(dialogue[:-1])
+    ]
     input_items = _content_parts_to_user_input(dialogue[-1][1])
     return history_items, input_items, "\n\n".join(instruction_parts)
 

@@ -21,16 +21,21 @@ print(client.chat.completions.create(
 
 ## Run
 
+One-shot from GitHub with `uvx`:
+
 ```bash
-python -m pip install -e '.[test]'
-CODEX_SHIM_TOKEN="$(python - <<'PY'
-import secrets
-print(secrets.token_urlsafe(32))
-PY
-)" codex-openai-shim --port 8000
+uvx --from git+https://github.com/kayvane1/openai-codex-shim codex-openai-shim --port 8000
+```
+
+For local development:
+
+```bash
+uv sync --group dev
+uv run codex-openai-shim --port 8000
 ```
 
 The `api_key` is a local shim bearer token. It is not an OpenAI API key and is never proxied to Codex.
+If `CODEX_SHIM_TOKEN` is not set, the shim prints a generated local token at startup.
 
 ## Implemented
 
@@ -66,17 +71,26 @@ This MVP returns a 400 instead of pretending to support features it cannot honor
 ## Tests
 
 ```bash
-python -m pip install -e '.[test]'
-pytest -m "not integration" tests
+uv sync --group dev
+uv run --group dev pytest -m "not integration" tests
 ```
 
 Live contract tests are opt-in because they start the FastAPI shim, launch `codex app-server` over stdio, and require working Codex auth:
 
 ```bash
-CODEX_SHIM_RUN_CONTRACT_TESTS=1 pytest -m integration tests/test_contract.py
+CODEX_SHIM_RUN_CONTRACT_TESTS=1 uv run --group dev pytest -m integration tests/test_contract.py
 ```
 
 The contract tests instantiate the official OpenAI SDK with `base_url=.../v1`, call `/v1/models`, call non-streaming chat completions including a multi-turn message chain and image content part, call streaming SSE chat completions, and verify missing/invalid local bearer tokens are rejected.
 The coverage gate is configured at 95% in `pyproject.toml`.
+
+## Linting
+
+```bash
+uv run --group dev ruff check src tests
+uv run --group dev ruff format --check src tests
+uv run --group dev pre-commit install
+uv run --group dev pre-commit run --all-files
+```
 
 The generated Codex app-server JSON Schema and TypeScript protocol references used for this implementation are in `generated/`.
