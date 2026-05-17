@@ -21,11 +21,13 @@ client = OpenAI(api_key="sk-...")
 With `codex-gateway`, you point the same SDK at a local server instead:
 
 ```python
+import os
+
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8000/v1",
-    api_key="<local-gateway-token>",
+    api_key=os.environ["CODEX_GATEWAY_KEY"],
 )
 ```
 
@@ -90,6 +92,12 @@ For scripts that only need the token value:
 uvx codex-gateway token
 ```
 
+For notebooks or SDK examples, put the token in a gateway-specific environment variable:
+
+```bash
+export CODEX_GATEWAY_KEY="$(uvx codex-gateway token)"
+```
+
 For shell-based setup:
 
 ```bash
@@ -101,11 +109,13 @@ If neither config nor `CODEX_GATEWAY_TOKEN` is set, the gateway prints a generat
 ## Example
 
 ```python
+import os
+
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8000/v1",
-    api_key="<local-gateway-token>",
+    api_key=os.environ["CODEX_GATEWAY_KEY"],
 )
 
 response = client.chat.completions.create(
@@ -134,15 +144,21 @@ print(response.output_text)
 Find where the example creates the OpenAI client:
 
 ```python
+from openai import OpenAI
+
 client = OpenAI()
 ```
 
 Replace it with:
 
 ```python
+import os
+
+from openai import OpenAI
+
 client = OpenAI(
     base_url="http://127.0.0.1:8000/v1",
-    api_key="<local-gateway-token>",
+    api_key=os.environ["CODEX_GATEWAY_KEY"],
 )
 ```
 
