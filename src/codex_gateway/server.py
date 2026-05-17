@@ -8,7 +8,7 @@ import shlex
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,10 @@ from .codex_client import (
 )
 
 LOCAL_TOKEN_PREFIX = "codex-gateway-local-"
+CONFIG_ENV_VAR = "CODEX_GATEWAY_CONFIG"
+CONFIG_DIR_NAME = "codex-gateway"
+CONFIG_FILE_NAME = "config.json"
+CONFIG_FILE_MODE = 0o600
 
 
 @dataclass(frozen=True)
@@ -80,7 +84,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
 
     app = FastAPI(
         title="Codex Gateway",
-        version="0.1.1",
+        version="0.1.2",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -214,31 +218,64 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["env", "token"],
-        help="Use `env` to print shell exports or `token` to print a bearer token instead of starting the server.",
+        choices=["env", "init", "show", "token"],
+        help=(
+            "Use `init` to create local config, `show` to print SDK setup, `env` to print shell exports, "
+            "or `token` to print a bearer token instead of starting the server."
+        ),
     )
-    parser.add_argument("--host", default=os.getenv("CODEX_GATEWAY_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("CODEX_GATEWAY_PORT", "8000")))
-    parser.add_argument("--token", default=os.getenv("CODEX_GATEWAY_TOKEN"))
-    parser.add_argument("--cwd", type=Path, default=Path(os.getenv("CODEX_GATEWAY_CWD", str(Path.cwd()))))
-    parser.add_argument("--reasoning-effort", default=os.getenv("CODEX_GATEWAY_REASONING_EFFORT", "low"))
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--token")
+    parser.add_argument("--cwd", type=Path)
+    parser.add_argument("--reasoning-effort")
+    parser.add_argument("--config", type=Path, help=f"Config path. Defaults to ${CONFIG_ENV_VAR} or XDG config.")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing config when used with `init`.")
     return parser
 
 
-def _settings_from_namespace(args: argparse.Namespace, parser: argparse.ArgumentParser) -> GatewaySettings:
-    generated_token = args.token is None
-    token = args.token or _new_local_token()
+def _settings_from_namespace(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    *,
+    generate_token: bool = True,
+    load_config: bool = True,
+) -> GatewaySettings:
+    config_path = _config_path(args.config)
+    try:
+        config = _read_config(config_path) if load_config else {}
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    token = _value_from_sources(args.token, "CODEX_GATEWAY_TOKEN", config, "token")
+    generated_token = token is None
+    if token is None:
+        if not generate_token:
+            parser.error("No local gateway token configured. Run `codex-gateway init` or pass --token.")
+        token = _new_local_token()
     if token.startswith("sk-"):
         parser.error("Use a local gateway bearer token, not an OpenAI API key, for --token/CODEX_GATEWAY_TOKEN.")
-    if args.host != "127.0.0.1":
+    host = str(_value_from_sources(args.host, "CODEX_GATEWAY_HOST", config, "host") or "127.0.0.1")
+    if host != "127.0.0.1":
         parser.error("The gateway binds to 127.0.0.1 by default; pass a loopback host only for this MVP.")
+
+    try:
+        port = int(_value_from_sources(args.port, "CODEX_GATEWAY_PORT", config, "port") or 8000)
+    except (TypeError, ValueError):
+        parser.error("Gateway port must be an integer.")
+
+    cwd_value = _value_from_sources(args.cwd, "CODEX_GATEWAY_CWD", config, "cwd")
+    reasoning_effort = str(
+        _value_from_sources(args.reasoning_effort, "CODEX_GATEWAY_REASONING_EFFORT", config, "reasoning_effort")
+        or "low"
+    )
 
     return GatewaySettings(
         token=token,
-        host=args.host,
-        port=args.port,
-        cwd=args.cwd,
-        reasoning_effort=args.reasoning_effort,
+        host=host,
+        port=port,
+        cwd=Path(cwd_value) if cwd_value is not None else Path.cwd(),
+        reasoning_effort=reasoning_effort,
         generated_token=generated_token,
     )
 
@@ -255,6 +292,57 @@ def _openai_base_url(settings: GatewaySettings) -> str:
 
 def _new_local_token() -> str:
     return f"{LOCAL_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+
+
+def _value_from_sources(
+    arg_value: Any,
+    env_name: str,
+    config: dict[str, Any],
+    config_key: str,
+) -> Any:
+    if arg_value is not None:
+        return arg_value
+    if env_name in os.environ:
+        return os.environ[env_name]
+    return config.get(config_key)
+
+
+def _config_path(arg_path: Path | None = None) -> Path:
+    if arg_path is not None:
+        return arg_path.expanduser()
+    if CONFIG_ENV_VAR in os.environ:
+        return Path(os.environ[CONFIG_ENV_VAR]).expanduser()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")).expanduser()
+    return config_home / CONFIG_DIR_NAME / CONFIG_FILE_NAME
+
+
+def _read_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Config file is not valid JSON: {path}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Config file must contain a JSON object: {path}")
+    return data
+
+
+def _write_config(path: Path, settings: GatewaySettings) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    config = {
+        "token": settings.token,
+        "host": settings.host,
+        "port": settings.port,
+        "reasoning_effort": settings.reasoning_effort,
+    }
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, CONFIG_FILE_MODE)
+    try:
+        with os.fdopen(fd, "w") as file:
+            json.dump(config, file, indent=2)
+            file.write("\n")
+    finally:
+        os.chmod(path, CONFIG_FILE_MODE)
 
 
 def _shell_exports(settings: GatewaySettings) -> str:
@@ -277,15 +365,35 @@ def _sdk_setup_snippet(settings: GatewaySettings) -> str:
     )
 
 
+def _init_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    path = _config_path(args.config)
+    if path.exists() and not args.force:
+        settings = _settings_from_namespace(args, parser, generate_token=False)
+        print(f"Codex Gateway is already initialized at: {path}\n\n{_sdk_setup_snippet(settings)}")
+        return
+
+    settings = _settings_from_namespace(args, parser)
+    if args.force and args.token is None and "CODEX_GATEWAY_TOKEN" not in os.environ:
+        settings = replace(settings, token=_new_local_token(), generated_token=True)
+    _write_config(path, settings)
+    print(f"Wrote Codex Gateway config to: {path}\n\n{_sdk_setup_snippet(settings)}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
-    settings = _settings_from_namespace(args, parser)
+    if args.command == "init":
+        _init_config(args, parser)
+        return
+    settings = _settings_from_namespace(args, parser, generate_token=args.command != "show")
     if args.command == "token":
         print(settings.token)
         return
     if args.command == "env":
         print(_shell_exports(settings))
+        return
+    if args.command == "show":
+        print(_sdk_setup_snippet(settings))
         return
     if settings.generated_token:
         print(

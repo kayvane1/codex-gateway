@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -434,10 +435,17 @@ def test_http_endpoints_cover_success_and_error_branches() -> None:
     asyncio.run(run())
 
 
-def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_settings_and_main_cli_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
     monkeypatch.delenv("CODEX_GATEWAY_TOKEN", raising=False)
     monkeypatch.delenv("CODEX_GATEWAY_HOST", raising=False)
     monkeypatch.delenv("CODEX_GATEWAY_PORT", raising=False)
+    monkeypatch.delenv("CODEX_GATEWAY_CWD", raising=False)
+    monkeypatch.delenv("CODEX_GATEWAY_REASONING_EFFORT", raising=False)
+    monkeypatch.setenv("CODEX_GATEWAY_CONFIG", str(tmp_path / "missing-config.json"))
     settings = _settings_from_args(["--token", "local", "--port", "8123", "--cwd", str(Path.cwd())])
     assert settings.token == "local"
     assert settings.port == 8123
@@ -457,10 +465,66 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
         "export CODEX_GATEWAY_TOKEN=local",
     ]
 
+    monkeypatch.setenv("CODEX_GATEWAY_PORT", "8127")
+    env_port_settings = _settings_from_args(["--token", "env-local"])
+    assert env_port_settings.port == 8127
+    monkeypatch.delenv("CODEX_GATEWAY_PORT", raising=False)
+
     with pytest.raises(SystemExit):
         _settings_from_args(["--host", "0.0.0.0"])
     with pytest.raises(SystemExit):
         _settings_from_args(["--token", "sk-not-a-local-gateway-token"])
+    bad_json_config = tmp_path / "bad-json.json"
+    bad_json_config.write_text("{")
+    with pytest.raises(SystemExit):
+        _settings_from_args(["--config", str(bad_json_config)])
+    bad_shape_config = tmp_path / "bad-shape.json"
+    bad_shape_config.write_text("[]")
+    with pytest.raises(SystemExit):
+        _settings_from_args(["--config", str(bad_shape_config)])
+    bad_port_config = tmp_path / "bad-port.json"
+    bad_port_config.write_text(json.dumps({"token": "local", "port": "nope"}))
+    with pytest.raises(SystemExit):
+        _settings_from_args(["--config", str(bad_port_config)])
+    with pytest.raises(SystemExit):
+        main(["show", "--config", str(tmp_path / "missing-show-config.json")])
+
+    monkeypatch.delenv("CODEX_GATEWAY_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    default_path_settings = _settings_from_args(["--token", "local-default-path"])
+    assert default_path_settings.token == "local-default-path"
+
+    config_path = tmp_path / "config.json"
+    main(["init", "--config", str(config_path), "--port", "8126"])
+    captured = capsys.readouterr()
+    assert f"Wrote Codex Gateway config to: {config_path}" in captured.out
+    assert "client = OpenAI(base_url=" in captured.out
+    assert (config_path.stat().st_mode & 0o777) == 0o600
+    config = json.loads(config_path.read_text())
+    assert config["token"].startswith(LOCAL_TOKEN_PREFIX)
+    assert config["host"] == "127.0.0.1"
+    assert config["port"] == 8126
+
+    config_settings = _settings_from_args(["--config", str(config_path)])
+    assert config_settings.token == config["token"]
+    assert config_settings.port == 8126
+    assert config_settings.generated_token is False
+
+    main(["show", "--config", str(config_path)])
+    captured = capsys.readouterr()
+    assert config["token"] in captured.out
+    assert "http://127.0.0.1:8126/v1" in captured.out
+
+    main(["init", "--config", str(config_path)])
+    captured = capsys.readouterr()
+    assert f"Codex Gateway is already initialized at: {config_path}" in captured.out
+
+    main(["init", "--force", "--config", str(config_path)])
+    captured = capsys.readouterr()
+    rotated_config = json.loads(config_path.read_text())
+    assert "Wrote Codex Gateway config" in captured.out
+    assert rotated_config["token"].startswith(LOCAL_TOKEN_PREFIX)
+    assert rotated_config["token"] != config["token"]
 
     calls: list[dict[str, Any]] = []
 
@@ -468,6 +532,12 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
         calls.append({"app": app, "host": host, "port": port, "log_level": log_level})
 
     monkeypatch.setattr(server.uvicorn, "run", fake_run)
+    main(["--config", str(config_path)])
+    captured = capsys.readouterr()
+    assert "Generated a local gateway token" not in captured.out
+    assert calls[-1]["host"] == "127.0.0.1"
+    assert calls[-1]["port"] == 8126
+
     main(["--port", "8130"])
     captured = capsys.readouterr()
     assert "Generated a local gateway token" in captured.out

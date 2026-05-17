@@ -109,7 +109,7 @@ class CodexAppServer:
                 "clientInfo": {
                     "name": "codex-gateway",
                     "title": "Codex Gateway",
-                    "version": "0.1.1",
+                    "version": "0.1.2",
                 },
                 "capabilities": {
                     "experimentalApi": True,
