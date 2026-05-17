@@ -625,7 +625,7 @@ def test_settings_and_main_cli_paths(
     assert calls[-1]["port"] == 8131
 
 
-def test_generate_ts_cli_wraps_codex_generator(
+def test_protocol_generation_cli_wraps_codex_generators(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
@@ -636,10 +636,12 @@ def test_generate_ts_cli_wraps_codex_generator(
         run_calls.append({"command": command, "check": check})
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
-    out_dir = tmp_path / "app-server-ts"
+    schema_dir = tmp_path / "app-server-json-schema"
+    ts_dir = tmp_path / "app-server-ts"
     prettier = tmp_path / "prettier"
 
-    main(["generate-ts", "--out", str(out_dir), "--prettier", str(prettier)])
+    main(["generate-json-schema", "--out", str(schema_dir)])
+    main(["generate-ts", "--out", str(ts_dir), "--prettier", str(prettier)])
 
     captured = capsys.readouterr()
     assert run_calls == [
@@ -647,14 +649,26 @@ def test_generate_ts_cli_wraps_codex_generator(
             "command": [
                 "codex",
                 "app-server",
+                "generate-json-schema",
+                "--experimental",
+                "--out",
+                str(schema_dir),
+            ],
+            "check": True,
+        },
+        {
+            "command": [
+                "codex",
+                "app-server",
                 "generate-ts",
                 "--experimental",
                 "--out",
-                str(out_dir),
+                str(ts_dir),
                 "--prettier",
                 str(prettier),
             ],
             "check": True,
-        }
+        },
     ]
-    assert f"Generated Codex app-server TypeScript bindings in: {out_dir}" in captured.out
+    assert f"Generated Codex app-server JSON Schema bundle in: {schema_dir}" in captured.out
+    assert f"Generated Codex app-server TypeScript bindings in: {ts_dir}" in captured.out

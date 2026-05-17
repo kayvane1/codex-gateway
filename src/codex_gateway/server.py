@@ -50,7 +50,9 @@ CONFIG_ENV_VAR = "CODEX_GATEWAY_CONFIG"
 CONFIG_DIR_NAME = "codex-gateway"
 CONFIG_FILE_NAME = "config.json"
 CONFIG_FILE_MODE = 0o600
-GENERATED_PROTOCOL_TS_DIR = Path("generated") / "app-server-ts"
+GENERATED_PROTOCOL_DIR = Path("generated")
+GENERATED_PROTOCOL_JSON_SCHEMA_DIR = GENERATED_PROTOCOL_DIR / "app-server-json-schema"
+GENERATED_PROTOCOL_TS_DIR = GENERATED_PROTOCOL_DIR / "app-server-ts"
 
 
 @dataclass(frozen=True)
@@ -282,11 +284,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["env", "generate-ts", "init", "show", "token"],
+        choices=["env", "generate-json-schema", "generate-ts", "init", "show", "token"],
         help=(
             "Use `init` to create local config, `show` to print SDK setup, `env` to print shell exports, "
-            "`generate-ts` to regenerate ignored protocol TypeScript bindings, or `token` to print a bearer token "
-            "instead of starting the server."
+            "`generate-json-schema` or `generate-ts` to regenerate ignored protocol artifacts, or `token` to print "
+            "a bearer token instead of starting the server."
         ),
     )
     parser.add_argument("--host")
@@ -299,7 +301,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out",
         type=Path,
-        help="Output directory for `generate-ts`. Defaults to generated/app-server-ts.",
+        help="Output directory for protocol generation commands. Defaults under generated/.",
     )
     parser.add_argument("--prettier", type=Path, help="Optional Prettier executable for `generate-ts`.")
     return parser
@@ -450,18 +452,25 @@ def _init_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
     print(f"Wrote Codex Gateway config to: {path}\n\n{_sdk_setup_snippet(settings)}")
 
 
-def _generate_protocol_ts(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    out_dir = args.out or GENERATED_PROTOCOL_TS_DIR
+def _run_codex_app_server_generator(
+    *,
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    generator: str,
+    default_out_dir: Path,
+    label: str,
+    extra_args: list[str] | None = None,
+) -> None:
+    out_dir = args.out or default_out_dir
     command = [
         "codex",
         "app-server",
-        "generate-ts",
+        generator,
         "--experimental",
         "--out",
         str(out_dir),
     ]
-    if args.prettier is not None:
-        command.extend(["--prettier", str(args.prettier)])
+    command.extend(extra_args or [])
 
     try:
         subprocess.run(command, check=True)
@@ -469,12 +478,39 @@ def _generate_protocol_ts(args: argparse.Namespace, parser: argparse.ArgumentPar
         parser.error("Unable to find `codex` on PATH; install or update the Codex CLI to generate protocol types.")
     except subprocess.CalledProcessError as exc:
         raise SystemExit(exc.returncode) from exc
-    print(f"Generated Codex app-server TypeScript bindings in: {out_dir}")
+    print(f"Generated Codex app-server {label} in: {out_dir}")
+
+
+def _generate_protocol_json_schema(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.prettier is not None:
+        parser.error("--prettier is only supported with `generate-ts`.")
+    _run_codex_app_server_generator(
+        args=args,
+        parser=parser,
+        generator="generate-json-schema",
+        default_out_dir=GENERATED_PROTOCOL_JSON_SCHEMA_DIR,
+        label="JSON Schema bundle",
+    )
+
+
+def _generate_protocol_ts(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    extra_args = ["--prettier", str(args.prettier)] if args.prettier is not None else None
+    _run_codex_app_server_generator(
+        args=args,
+        parser=parser,
+        generator="generate-ts",
+        default_out_dir=GENERATED_PROTOCOL_TS_DIR,
+        label="TypeScript bindings",
+        extra_args=extra_args,
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    if args.command == "generate-json-schema":
+        _generate_protocol_json_schema(args, parser)
+        return
     if args.command == "generate-ts":
         _generate_protocol_ts(args, parser)
         return
