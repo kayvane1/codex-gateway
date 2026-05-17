@@ -68,7 +68,7 @@ If neither config nor `CODEX_GATEWAY_TOKEN` is set, the gateway prints a generat
 | --- | --- | --- |
 | Python | Package metadata requires Python 3.11 or newer. CI targets 3.11, 3.12, and 3.13. | Unit tests and lint in GitHub Actions. |
 | OpenAI Python SDK | Development and contract tests use `openai>=2.0` against the supported chat and Responses subsets. | Opt-in contract tests instantiate the official SDK with `base_url=.../v1`. |
-| Codex CLI/app-server | Requires a local `codex app-server --listen stdio://` that supports the app-server methods used by this repository's committed protocol snapshot. | Live contract tests are opt-in because they require Codex CLI/app-server and auth on the runner. |
+| Codex CLI/app-server | Requires a local `codex app-server --listen stdio://` that supports the app-server methods used by this gateway. | Live contract tests are opt-in because they require Codex CLI/app-server and auth on the runner. |
 | OpenAI HTTP API surface | Only `/v1/models` and the documented subsets of `/v1/chat/completions` and `/v1/responses` are supported. | Unsupported request features return explicit 400 errors. |
 
 No `LICENSE` file is currently present, so the package metadata intentionally does not declare a license. Choosing and adding a license is a release blocker before public package distribution.
@@ -132,14 +132,14 @@ uv run --group dev pre-commit install
 uv run --group dev pre-commit run --all-files
 ```
 
-The checked-in Codex app-server JSON Schema protocol reference used for this implementation is in `generated/app-server-json-schema/`.
-The TypeScript protocol reference is intentionally not committed; regenerate it locally when needed:
+Codex app-server protocol references are intentionally not committed. Regenerate them locally when needed:
 
 ```bash
+uv run codex-gateway generate-json-schema
 uv run codex-gateway generate-ts
 ```
 
-This writes ignored files to `generated/app-server-ts/` by default. Pass `--out <dir>` to use a different location.
+These write ignored files under `generated/` by default. Pass `--out <dir>` to use a different location.
 
 ## Release Checklist
 
@@ -149,5 +149,5 @@ This writes ignored files to `generated/app-server-ts/` by default. Pass `--out 
 - Run `uv run --group dev ruff check src tests`.
 - Run `uv build` and `uvx twine check dist/*.whl dist/*.tar.gz`.
 - Run contract tests only when a runner has Codex CLI/app-server and auth: `CODEX_GATEWAY_RUN_CONTRACT_TESTS=1 uv run --group dev pytest -m integration tests/test_contract.py`.
-- Confirm generated JSON Schema protocol artifacts are unchanged unless the release is intentionally updating the protocol snapshot.
+- Do not commit `generated/` protocol artifacts; regenerate them locally when reviewing protocol changes.
 - Do not publish publicly until an explicit repository license has been selected and added.
