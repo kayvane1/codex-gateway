@@ -1,6 +1,6 @@
-# OpenAI Codex Shim
+# Codex Gateway
 
-**Experimental:** this is an early local compatibility shim for Codex app-server. Treat the HTTP contract and safety model as unstable, review changes carefully before relying on it, and do not expose it outside loopback.
+**Experimental:** this is an early local compatibility gateway for Codex app-server. Treat the HTTP contract and safety model as unstable, review changes carefully before relying on it, and do not expose it outside loopback.
 
 Local FastAPI adapter that lets the official OpenAI Python SDK talk to `codex app-server` over stdio:
 
@@ -9,7 +9,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8000/v1",
-    api_key="<local-shim-token>",
+    api_key="<local-gateway-token>",
 )
 
 print(client.models.list())
@@ -21,34 +21,34 @@ print(client.chat.completions.create(
 
 ## Run
 
-One-shot from GitHub with `uvx`, including local shim environment variables:
+One-shot from GitHub with `uvx`, including local gateway environment variables:
 
 ```bash
-eval "$(uvx --from git+https://github.com/kayvane1/openai-codex-shim codex-openai-shim env)"
-uvx --from git+https://github.com/kayvane1/openai-codex-shim codex-openai-shim
+eval "$(uvx --from git+https://github.com/kayvane1/codex-gateway codex-gateway env)"
+uvx --from git+https://github.com/kayvane1/codex-gateway codex-gateway
 ```
 
-`codex-openai-shim env` prints shell exports for `CODEX_SHIM_TOKEN`, `CODEX_SHIM_BASE_URL`, `CODEX_SHIM_HOST`, and `CODEX_SHIM_PORT`.
+`codex-gateway env` prints shell exports for `CODEX_GATEWAY_TOKEN`, `CODEX_GATEWAY_BASE_URL`, `CODEX_GATEWAY_HOST`, and `CODEX_GATEWAY_PORT`.
 It does not write the generated local bearer token to disk. With those variables set, OpenAI SDK setup is three lines:
 
 ```python
 import os
 from openai import OpenAI
 
-client = OpenAI(base_url=os.environ["CODEX_SHIM_BASE_URL"], api_key=os.environ["CODEX_SHIM_TOKEN"])
+client = OpenAI(base_url=os.environ["CODEX_GATEWAY_BASE_URL"], api_key=os.environ["CODEX_GATEWAY_TOKEN"])
 ```
 
-For scripts that only need a token value, use `codex-openai-shim token`.
+For scripts that only need a token value, use `codex-gateway token`.
 
 For local development:
 
 ```bash
 uv sync --group dev
-uv run codex-openai-shim --port 8000
+uv run codex-gateway --port 8000
 ```
 
-The `api_key` is a local shim bearer token. It is not an OpenAI API key and is never proxied to Codex.
-If `CODEX_SHIM_TOKEN` is not set, the shim prints a generated local token at startup.
+The `api_key` is a local gateway bearer token. It is not an OpenAI API key and is never proxied to Codex.
+If `CODEX_GATEWAY_TOKEN` is not set, the gateway prints a generated local token at startup.
 
 ## Implemented
 
@@ -88,10 +88,10 @@ uv sync --group dev
 uv run --group dev pytest -m "not integration" tests
 ```
 
-Live contract tests are opt-in because they start the FastAPI shim, launch `codex app-server` over stdio, and require working Codex auth:
+Live contract tests are opt-in because they start the FastAPI gateway, launch `codex app-server` over stdio, and require working Codex auth:
 
 ```bash
-CODEX_SHIM_RUN_CONTRACT_TESTS=1 uv run --group dev pytest -m integration tests/test_contract.py
+CODEX_GATEWAY_RUN_CONTRACT_TESTS=1 uv run --group dev pytest -m integration tests/test_contract.py
 ```
 
 The contract tests instantiate the official OpenAI SDK with `base_url=.../v1`, call `/v1/models`, call non-streaming chat completions including a multi-turn message chain and image content part, call streaming SSE chat completions, and verify missing/invalid local bearer tokens are rejected.

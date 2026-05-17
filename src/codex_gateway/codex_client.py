@@ -80,7 +80,7 @@ def _turn_start_params_with_safety(params: dict[str, Any] | None) -> dict[str, A
 
 
 class CodexAppServer:
-    """High-level Codex app-server client used by the OpenAI shim."""
+    """High-level Codex app-server client used by the OpenAI gateway."""
 
     def __init__(self, settings: CodexClientSettings | None = None) -> None:
         self.settings = settings or CodexClientSettings()
@@ -107,8 +107,8 @@ class CodexAppServer:
             "initialize",
             {
                 "clientInfo": {
-                    "name": "openai-codex-shim",
-                    "title": "OpenAI Codex Shim",
+                    "name": "codex-gateway",
+                    "title": "Codex Gateway",
                     "version": "0.1.0",
                 },
                 "capabilities": {
@@ -179,7 +179,7 @@ class CodexAppServer:
                 **_thread_start_safety_params(),
                 "baseInstructions": (
                     "You are a text-only assistant behind a local OpenAI-compatible "
-                    "compatibility shim. Answer directly in plain text. Do not execute "
+                    "compatibility gateway. Answer directly in plain text. Do not execute "
                     "shell commands, read or write files, call tools, or request approvals."
                 ),
                 "developerInstructions": developer_instructions,
@@ -230,7 +230,7 @@ def _materialize_data_image_inputs(input_items: list[dict[str, Any]]) -> Iterato
                 prepared_items.append(item)
                 continue
 
-            tempdir = tempdir or tempfile.TemporaryDirectory(prefix="codex-openai-shim-images-")
+            tempdir = tempdir or tempfile.TemporaryDirectory(prefix="codex-gateway-images-")
             media_type, encoded = item["url"].split(",", 1)
             extension = _image_extension(media_type)
             image_path = Path(tempdir.name) / f"image-{image_index}.{extension}"

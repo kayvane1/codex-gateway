@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openai-codex-shim"
+name = "codex-gateway"
 version = "0.1.0"
-description = "Local OpenAI-compatible FastAPI adapter for Codex app-server."
+description = "Local OpenAI-compatible FastAPI gateway for Codex app-server."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,7 +16,12 @@ dependencies = [
 ]
 
 [project.scripts]
-codex-openai-shim = "codex_openai_shim.server:main"
+codex-gateway = "codex_gateway.server:main"
+
+[project.urls]
+Homepage = "https://github.com/kayvane1/codex-gateway"
+Repository = "https://github.com/kayvane1/codex-gateway"
+Issues = "https://github.com/kayvane1/codex-gateway/issues"
 
 [dependency-groups]
 dev = [
@@ -46,7 +51,7 @@ where = ["src"]
 
 [tool.coverage.run]
 branch = true
-source = ["codex_openai_shim"]
+source = ["codex_gateway"]
 
 [tool.coverage.report]
 show_missing = true

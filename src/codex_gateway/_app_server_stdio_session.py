@@ -233,7 +233,7 @@ class AppServerStdioSession:
         elif method == "account/chatgptAuthTokens/refresh":
             await self._send_error(
                 request_id,
-                "Codex auth token refresh is not supported by the local OpenAI shim.",
+                "Codex auth token refresh is not supported by the local OpenAI gateway.",
             )
         else:
             await self._send_error(request_id, f"Server request {method!r} is not supported.")

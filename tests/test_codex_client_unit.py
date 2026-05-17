@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-import codex_openai_shim.codex_client as codex_client_module
-from codex_openai_shim._app_server_stdio_session import AppServerStdioSession, _redact
-from codex_openai_shim._codex_turn_lifecycle import CodexTurnLifecycle, openai_usage_from_codex
-from codex_openai_shim.codex_client import (
+import codex_gateway.codex_client as codex_client_module
+from codex_gateway._app_server_stdio_session import AppServerStdioSession, _redact
+from codex_gateway._codex_turn_lifecycle import CodexTurnLifecycle, openai_usage_from_codex
+from codex_gateway.codex_client import (
     CodexAppServer,
     CodexAppServerError,
     CodexChatResult,

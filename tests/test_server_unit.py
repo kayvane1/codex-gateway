@@ -6,19 +6,19 @@ from typing import Any
 import httpx
 import pytest
 
-from codex_openai_shim import server
-from codex_openai_shim.chat_contract import (
+from codex_gateway import server
+from codex_gateway.chat_contract import (
     _extract_content_parts,
     _extract_text_content,
     _messages_to_codex_history_and_input,
     _validate_chat_body,
     sse,
 )
-from codex_openai_shim.codex_client import CodexAppServerError, CodexChatResult
-from codex_openai_shim.server import (
+from codex_gateway.codex_client import CodexAppServerError, CodexChatResult
+from codex_gateway.server import (
     LOCAL_TOKEN_PREFIX,
+    GatewaySettings,
     OpenAIHTTPError,
-    ShimSettings,
     _settings_from_args,
     _shell_exports,
     create_app,
@@ -244,7 +244,7 @@ def test_sse_uses_openai_data_framing() -> None:
 @pytest.mark.parametrize("endpoint", ["/v1/models", "/v1/chat/completions"])
 def test_http_auth_rejects_missing_token(endpoint: str) -> None:
     async def run() -> None:
-        app = create_app(ShimSettings(token="token"))
+        app = create_app(GatewaySettings(token="token"))
         app.state.codex = FakeCodex()
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -286,7 +286,7 @@ def test_lifespan_starts_codex_assigns_state_and_healthz_is_public(monkeypatch: 
     async def run() -> None:
         monkeypatch.setattr(server, "CodexAppServer", fake_codex_app_server)
         app = create_app(
-            ShimSettings(
+            GatewaySettings(
                 token="token",
                 codex_command=("fake-codex", "app-server"),
                 cwd=Path.cwd(),
@@ -321,7 +321,7 @@ def test_lifespan_starts_codex_assigns_state_and_healthz_is_public(monkeypatch: 
 
 def test_http_endpoints_cover_success_and_error_branches() -> None:
     async def run() -> None:
-        app = create_app(ShimSettings(token="token"))
+        app = create_app(GatewaySettings(token="token"))
         fake = FakeCodex()
         app.state.codex = fake
         headers = {"Authorization": "Bearer token"}
@@ -435,9 +435,9 @@ def test_http_endpoints_cover_success_and_error_branches() -> None:
 
 
 def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.delenv("CODEX_SHIM_TOKEN", raising=False)
-    monkeypatch.delenv("CODEX_SHIM_HOST", raising=False)
-    monkeypatch.delenv("CODEX_SHIM_PORT", raising=False)
+    monkeypatch.delenv("CODEX_GATEWAY_TOKEN", raising=False)
+    monkeypatch.delenv("CODEX_GATEWAY_HOST", raising=False)
+    monkeypatch.delenv("CODEX_GATEWAY_PORT", raising=False)
     settings = _settings_from_args(["--token", "local", "--port", "8123", "--cwd", str(Path.cwd())])
     assert settings.token == "local"
     assert settings.port == 8123
@@ -451,16 +451,16 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
     assert env_settings.token == "local"
     assert env_settings.port == 8125
     assert _shell_exports(env_settings).splitlines() == [
-        "export CODEX_SHIM_HOST=127.0.0.1",
-        "export CODEX_SHIM_PORT=8125",
-        "export CODEX_SHIM_BASE_URL=http://127.0.0.1:8125/v1",
-        "export CODEX_SHIM_TOKEN=local",
+        "export CODEX_GATEWAY_HOST=127.0.0.1",
+        "export CODEX_GATEWAY_PORT=8125",
+        "export CODEX_GATEWAY_BASE_URL=http://127.0.0.1:8125/v1",
+        "export CODEX_GATEWAY_TOKEN=local",
     ]
 
     with pytest.raises(SystemExit):
         _settings_from_args(["--host", "0.0.0.0"])
     with pytest.raises(SystemExit):
-        _settings_from_args(["--token", "sk-not-a-local-shim-token"])
+        _settings_from_args(["--token", "sk-not-a-local-gateway-token"])
 
     calls: list[dict[str, Any]] = []
 
@@ -470,7 +470,7 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
     monkeypatch.setattr(server.uvicorn, "run", fake_run)
     main(["--port", "8130"])
     captured = capsys.readouterr()
-    assert "Generated a local shim token" in captured.out
+    assert "Generated a local gateway token" in captured.out
     assert "client = OpenAI(base_url=" in captured.out
     assert LOCAL_TOKEN_PREFIX in captured.out
     assert calls[-1]["host"] == "127.0.0.1"
@@ -478,7 +478,7 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
 
     main(["--token", "explicit", "--port", "8131"])
     captured = capsys.readouterr()
-    assert "Generated a local shim token" not in captured.out
+    assert "Generated a local gateway token" not in captured.out
     assert calls[-1]["port"] == 8131
 
     main(["token", "--token", "only-token"])
@@ -488,7 +488,7 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
 
     main(["env", "--token", "env-token", "--port", "8132"])
     captured = capsys.readouterr()
-    assert "export CODEX_SHIM_BASE_URL=http://127.0.0.1:8132/v1\n" in captured.out
-    assert "export CODEX_SHIM_TOKEN=env-token\n" in captured.out
+    assert "export CODEX_GATEWAY_BASE_URL=http://127.0.0.1:8132/v1\n" in captured.out
+    assert "export CODEX_GATEWAY_TOKEN=env-token\n" in captured.out
     assert "OPENAI_API_KEY" not in captured.out
     assert calls[-1]["port"] == 8131

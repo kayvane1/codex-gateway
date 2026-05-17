@@ -11,10 +11,10 @@ import openai
 import pytest
 import uvicorn
 
-from codex_openai_shim.server import ShimSettings, create_app
+from codex_gateway.server import GatewaySettings, create_app
 
 TEST_TOKEN = "local-contract-test-token"
-RUN_CONTRACT_TESTS_ENV = "CODEX_SHIM_RUN_CONTRACT_TESTS"
+RUN_CONTRACT_TESTS_ENV = "CODEX_GATEWAY_RUN_CONTRACT_TESTS"
 
 pytestmark = [
     pytest.mark.integration,
@@ -26,9 +26,9 @@ pytestmark = [
 
 
 @pytest.fixture(scope="module")
-def shim_server() -> str:
+def gateway_server() -> str:
     port = _free_port()
-    settings = ShimSettings(
+    settings = GatewaySettings(
         token=TEST_TOKEN,
         host="127.0.0.1",
         port=port,
@@ -56,7 +56,7 @@ def shim_server() -> str:
     else:
         server.should_exit = True
         thread.join(timeout=10)
-        raise RuntimeError("FastAPI shim did not become ready.")
+        raise RuntimeError("FastAPI gateway did not become ready.")
 
     yield base_url
 
@@ -64,8 +64,8 @@ def shim_server() -> str:
     thread.join(timeout=20)
 
 
-def test_openai_sdk_models_non_streaming_and_streaming_chat(shim_server: str) -> None:
-    client = openai.OpenAI(base_url=f"{shim_server}/v1", api_key=TEST_TOKEN, timeout=240)
+def test_openai_sdk_models_non_streaming_and_streaming_chat(gateway_server: str) -> None:
+    client = openai.OpenAI(base_url=f"{gateway_server}/v1", api_key=TEST_TOKEN, timeout=240)
 
     models = client.models.list()
     assert models.data
@@ -122,20 +122,20 @@ def test_openai_sdk_models_non_streaming_and_streaming_chat(shim_server: str) ->
     assert "stream-pong" in streamed_text.lower()
 
 
-def test_rejects_missing_or_invalid_local_bearer_tokens(shim_server: str) -> None:
-    missing = httpx.get(f"{shim_server}/v1/models", timeout=10)
+def test_rejects_missing_or_invalid_local_bearer_tokens(gateway_server: str) -> None:
+    missing = httpx.get(f"{gateway_server}/v1/models", timeout=10)
     assert missing.status_code == 401
     assert missing.json()["error"]["type"] == "authentication_error"
 
     invalid = httpx.get(
-        f"{shim_server}/v1/models",
+        f"{gateway_server}/v1/models",
         headers={"Authorization": "Bearer not-the-local-token"},
         timeout=10,
     )
     assert invalid.status_code == 401
     assert invalid.json()["error"]["code"] == "invalid_api_key"
 
-    bad_client = openai.OpenAI(base_url=f"{shim_server}/v1", api_key="not-the-local-token", timeout=10)
+    bad_client = openai.OpenAI(base_url=f"{gateway_server}/v1", api_key="not-the-local-token", timeout=10)
     with pytest.raises(openai.AuthenticationError):
         bad_client.models.list()
 

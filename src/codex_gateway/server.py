@@ -39,11 +39,11 @@ from .codex_client import (
     CodexClientSettings,
 )
 
-LOCAL_TOKEN_PREFIX = "codex-shim-local-"
+LOCAL_TOKEN_PREFIX = "codex-gateway-local-"
 
 
 @dataclass(frozen=True)
-class ShimSettings:
+class GatewaySettings:
     token: str
     host: str = "127.0.0.1"
     port: int = 8000
@@ -58,7 +58,7 @@ class ShimSettings:
 security = HTTPBearer(auto_error=False)
 
 
-def create_app(settings: ShimSettings) -> FastAPI:
+def create_app(settings: GatewaySettings) -> FastAPI:
     codex = CodexAppServer(
         CodexClientSettings(
             command=settings.codex_command,
@@ -79,7 +79,7 @@ def create_app(settings: ShimSettings) -> FastAPI:
             await codex.stop()
 
     app = FastAPI(
-        title="OpenAI Codex Shim",
+        title="Codex Gateway",
         version="0.1.0",
         lifespan=lifespan,
         docs_url=None,
@@ -97,7 +97,7 @@ def create_app(settings: ShimSettings) -> FastAPI:
         if not supplied or not secrets.compare_digest(supplied, settings.token):
             return raise_openai_error(
                 401,
-                "Missing or invalid local shim bearer token.",
+                "Missing or invalid local gateway bearer token.",
                 "authentication_error",
                 "invalid_api_key",
                 {"WWW-Authenticate": "Bearer"},
@@ -210,30 +210,30 @@ def _openai_error_response(
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run a local OpenAI-compatible shim for Codex app-server.")
+    parser = argparse.ArgumentParser(description="Run a local OpenAI-compatible gateway for Codex app-server.")
     parser.add_argument(
         "command",
         nargs="?",
         choices=["env", "token"],
         help="Use `env` to print shell exports or `token` to print a bearer token instead of starting the server.",
     )
-    parser.add_argument("--host", default=os.getenv("CODEX_SHIM_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("CODEX_SHIM_PORT", "8000")))
-    parser.add_argument("--token", default=os.getenv("CODEX_SHIM_TOKEN"))
-    parser.add_argument("--cwd", type=Path, default=Path(os.getenv("CODEX_SHIM_CWD", str(Path.cwd()))))
-    parser.add_argument("--reasoning-effort", default=os.getenv("CODEX_SHIM_REASONING_EFFORT", "low"))
+    parser.add_argument("--host", default=os.getenv("CODEX_GATEWAY_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("CODEX_GATEWAY_PORT", "8000")))
+    parser.add_argument("--token", default=os.getenv("CODEX_GATEWAY_TOKEN"))
+    parser.add_argument("--cwd", type=Path, default=Path(os.getenv("CODEX_GATEWAY_CWD", str(Path.cwd()))))
+    parser.add_argument("--reasoning-effort", default=os.getenv("CODEX_GATEWAY_REASONING_EFFORT", "low"))
     return parser
 
 
-def _settings_from_namespace(args: argparse.Namespace, parser: argparse.ArgumentParser) -> ShimSettings:
+def _settings_from_namespace(args: argparse.Namespace, parser: argparse.ArgumentParser) -> GatewaySettings:
     generated_token = args.token is None
     token = args.token or _new_local_token()
     if token.startswith("sk-"):
-        parser.error("Use a local shim bearer token, not an OpenAI API key, for --token/CODEX_SHIM_TOKEN.")
+        parser.error("Use a local gateway bearer token, not an OpenAI API key, for --token/CODEX_GATEWAY_TOKEN.")
     if args.host != "127.0.0.1":
-        parser.error("The shim binds to 127.0.0.1 by default; pass a loopback host only for this MVP.")
+        parser.error("The gateway binds to 127.0.0.1 by default; pass a loopback host only for this MVP.")
 
-    return ShimSettings(
+    return GatewaySettings(
         token=token,
         host=args.host,
         port=args.port,
@@ -243,13 +243,13 @@ def _settings_from_namespace(args: argparse.Namespace, parser: argparse.Argument
     )
 
 
-def _settings_from_args(argv: list[str] | None = None) -> ShimSettings:
+def _settings_from_args(argv: list[str] | None = None) -> GatewaySettings:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
     return _settings_from_namespace(args, parser)
 
 
-def _openai_base_url(settings: ShimSettings) -> str:
+def _openai_base_url(settings: GatewaySettings) -> str:
     return f"http://{settings.host}:{settings.port}/v1"
 
 
@@ -257,17 +257,17 @@ def _new_local_token() -> str:
     return f"{LOCAL_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
 
 
-def _shell_exports(settings: ShimSettings) -> str:
+def _shell_exports(settings: GatewaySettings) -> str:
     values = {
-        "CODEX_SHIM_HOST": settings.host,
-        "CODEX_SHIM_PORT": str(settings.port),
-        "CODEX_SHIM_BASE_URL": _openai_base_url(settings),
-        "CODEX_SHIM_TOKEN": settings.token,
+        "CODEX_GATEWAY_HOST": settings.host,
+        "CODEX_GATEWAY_PORT": str(settings.port),
+        "CODEX_GATEWAY_BASE_URL": _openai_base_url(settings),
+        "CODEX_GATEWAY_TOKEN": settings.token,
     }
     return "\n".join(f"export {name}={shlex.quote(value)}" for name, value in values.items())
 
 
-def _sdk_setup_snippet(settings: ShimSettings) -> str:
+def _sdk_setup_snippet(settings: GatewaySettings) -> str:
     return "\n".join(
         [
             "Use this OpenAI SDK setup:",
@@ -289,7 +289,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     if settings.generated_token:
         print(
-            f"Generated a local shim token for this process.\n\n{_sdk_setup_snippet(settings)}",
+            f"Generated a local gateway token for this process.\n\n{_sdk_setup_snippet(settings)}",
             flush=True,
         )
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="warning")
