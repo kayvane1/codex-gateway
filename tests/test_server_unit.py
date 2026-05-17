@@ -16,9 +16,11 @@ from codex_openai_shim.chat_contract import (
 )
 from codex_openai_shim.codex_client import CodexAppServerError, CodexChatResult
 from codex_openai_shim.server import (
+    LOCAL_TOKEN_PREFIX,
     OpenAIHTTPError,
     ShimSettings,
     _settings_from_args,
+    _shell_exports,
     create_app,
     main,
 )
@@ -442,11 +444,23 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
     assert settings.generated_token is False
 
     generated = _settings_from_args(["--port", "8124"])
-    assert generated.token
+    assert generated.token.startswith(LOCAL_TOKEN_PREFIX)
     assert generated.generated_token is True
+
+    env_settings = _settings_from_args(["env", "--token", "local", "--port", "8125"])
+    assert env_settings.token == "local"
+    assert env_settings.port == 8125
+    assert _shell_exports(env_settings).splitlines() == [
+        "export CODEX_SHIM_HOST=127.0.0.1",
+        "export CODEX_SHIM_PORT=8125",
+        "export CODEX_SHIM_BASE_URL=http://127.0.0.1:8125/v1",
+        "export CODEX_SHIM_TOKEN=local",
+    ]
 
     with pytest.raises(SystemExit):
         _settings_from_args(["--host", "0.0.0.0"])
+    with pytest.raises(SystemExit):
+        _settings_from_args(["--token", "sk-not-a-local-shim-token"])
 
     calls: list[dict[str, Any]] = []
 
@@ -457,10 +471,24 @@ def test_settings_and_main_cli_paths(monkeypatch: pytest.MonkeyPatch, capsys: py
     main(["--port", "8130"])
     captured = capsys.readouterr()
     assert "Generated a local shim token" in captured.out
+    assert "client = OpenAI(base_url=" in captured.out
+    assert LOCAL_TOKEN_PREFIX in captured.out
     assert calls[-1]["host"] == "127.0.0.1"
     assert calls[-1]["port"] == 8130
 
     main(["--token", "explicit", "--port", "8131"])
     captured = capsys.readouterr()
     assert "Generated a local shim token" not in captured.out
+    assert calls[-1]["port"] == 8131
+
+    main(["token", "--token", "only-token"])
+    captured = capsys.readouterr()
+    assert captured.out == "only-token\n"
+    assert calls[-1]["port"] == 8131
+
+    main(["env", "--token", "env-token", "--port", "8132"])
+    captured = capsys.readouterr()
+    assert "export CODEX_SHIM_BASE_URL=http://127.0.0.1:8132/v1\n" in captured.out
+    assert "export CODEX_SHIM_TOKEN=env-token\n" in captured.out
+    assert "OPENAI_API_KEY" not in captured.out
     assert calls[-1]["port"] == 8131

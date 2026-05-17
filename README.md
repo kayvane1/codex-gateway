@@ -21,11 +21,24 @@ print(client.chat.completions.create(
 
 ## Run
 
-One-shot from GitHub with `uvx`:
+One-shot from GitHub with `uvx`, including local shim environment variables:
 
 ```bash
-uvx --from git+https://github.com/kayvane1/openai-codex-shim codex-openai-shim --port 8000
+eval "$(uvx --from git+https://github.com/kayvane1/openai-codex-shim codex-openai-shim env)"
+uvx --from git+https://github.com/kayvane1/openai-codex-shim codex-openai-shim
 ```
+
+`codex-openai-shim env` prints shell exports for `CODEX_SHIM_TOKEN`, `CODEX_SHIM_BASE_URL`, `CODEX_SHIM_HOST`, and `CODEX_SHIM_PORT`.
+It does not write the generated local bearer token to disk. With those variables set, OpenAI SDK setup is three lines:
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(base_url=os.environ["CODEX_SHIM_BASE_URL"], api_key=os.environ["CODEX_SHIM_TOKEN"])
+```
+
+For scripts that only need a token value, use `codex-openai-shim token`.
 
 For local development:
 

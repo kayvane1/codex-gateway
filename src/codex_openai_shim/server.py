@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import secrets
+import shlex
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -37,6 +38,8 @@ from .codex_client import (
     CodexAppServerError,
     CodexClientSettings,
 )
+
+LOCAL_TOKEN_PREFIX = "codex-shim-local-"
 
 
 @dataclass(frozen=True)
@@ -206,17 +209,27 @@ def _openai_error_response(
     )
 
 
-def _settings_from_args(argv: list[str] | None = None) -> ShimSettings:
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a local OpenAI-compatible shim for Codex app-server.")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["env", "token"],
+        help="Use `env` to print shell exports or `token` to print a bearer token instead of starting the server.",
+    )
     parser.add_argument("--host", default=os.getenv("CODEX_SHIM_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("CODEX_SHIM_PORT", "8000")))
     parser.add_argument("--token", default=os.getenv("CODEX_SHIM_TOKEN"))
     parser.add_argument("--cwd", type=Path, default=Path(os.getenv("CODEX_SHIM_CWD", str(Path.cwd()))))
     parser.add_argument("--reasoning-effort", default=os.getenv("CODEX_SHIM_REASONING_EFFORT", "low"))
-    args = parser.parse_args(argv)
+    return parser
 
+
+def _settings_from_namespace(args: argparse.Namespace, parser: argparse.ArgumentParser) -> ShimSettings:
     generated_token = args.token is None
-    token = args.token or secrets.token_urlsafe(32)
+    token = args.token or _new_local_token()
+    if token.startswith("sk-"):
+        parser.error("Use a local shim bearer token, not an OpenAI API key, for --token/CODEX_SHIM_TOKEN.")
     if args.host != "127.0.0.1":
         parser.error("The shim binds to 127.0.0.1 by default; pass a loopback host only for this MVP.")
 
@@ -230,11 +243,53 @@ def _settings_from_args(argv: list[str] | None = None) -> ShimSettings:
     )
 
 
+def _settings_from_args(argv: list[str] | None = None) -> ShimSettings:
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    return _settings_from_namespace(args, parser)
+
+
+def _openai_base_url(settings: ShimSettings) -> str:
+    return f"http://{settings.host}:{settings.port}/v1"
+
+
+def _new_local_token() -> str:
+    return f"{LOCAL_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+
+
+def _shell_exports(settings: ShimSettings) -> str:
+    values = {
+        "CODEX_SHIM_HOST": settings.host,
+        "CODEX_SHIM_PORT": str(settings.port),
+        "CODEX_SHIM_BASE_URL": _openai_base_url(settings),
+        "CODEX_SHIM_TOKEN": settings.token,
+    }
+    return "\n".join(f"export {name}={shlex.quote(value)}" for name, value in values.items())
+
+
+def _sdk_setup_snippet(settings: ShimSettings) -> str:
+    return "\n".join(
+        [
+            "Use this OpenAI SDK setup:",
+            "from openai import OpenAI",
+            f'client = OpenAI(base_url="{_openai_base_url(settings)}", api_key="{settings.token}")',
+        ]
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
-    settings = _settings_from_args(argv)
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    settings = _settings_from_namespace(args, parser)
+    if args.command == "token":
+        print(settings.token)
+        return
+    if args.command == "env":
+        print(_shell_exports(settings))
+        return
     if settings.generated_token:
         print(
-            f"Generated a local shim token for this process. Use it as the OpenAI SDK api_key: {settings.token}",
+            f"Generated a local shim token for this process.\n\n{_sdk_setup_snippet(settings)}",
             flush=True,
         )
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="warning")
