@@ -21,30 +21,30 @@ print(client.chat.completions.create(
 
 ## Run
 
-One-shot from PyPI:
+Initialize once, then start the gateway:
 
 ```bash
+uvx codex-gateway init
 uvx codex-gateway
 ```
 
-When no token is configured, `codex-gateway` prints a generated local bearer token and the matching OpenAI SDK setup.
-For a reusable shell session, `codex-gateway env` prints exports for `CODEX_GATEWAY_TOKEN`, `CODEX_GATEWAY_BASE_URL`, `CODEX_GATEWAY_HOST`, and `CODEX_GATEWAY_PORT`:
+`codex-gateway init` writes `~/.config/codex-gateway/config.json` with a generated local bearer token and `0600` permissions, then prints the matching OpenAI SDK setup. The server reads that config automatically on future runs.
+
+To reprint the SDK setup later:
 
 ```bash
-eval "$(uvx codex-gateway env)"
-uvx codex-gateway
+uvx codex-gateway show
 ```
 
-It does not write the generated local bearer token to disk. With those variables set, OpenAI SDK setup is three lines:
+The OpenAI SDK setup is three lines:
 
 ```python
-import os
 from openai import OpenAI
 
-client = OpenAI(base_url=os.environ["CODEX_GATEWAY_BASE_URL"], api_key=os.environ["CODEX_GATEWAY_TOKEN"])
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="<local-gateway-token>")
 ```
 
-For scripts that only need a token value, use `codex-gateway token`.
+For scripts that only need a token value, use `codex-gateway token`. `codex-gateway env` still prints shell exports for scripted use, but interactive setup should prefer `init` and `show`.
 
 For local development:
 
@@ -54,7 +54,7 @@ uv run codex-gateway --port 8000
 ```
 
 The `api_key` is a local gateway bearer token. It is not an OpenAI API key and is never proxied to Codex.
-If `CODEX_GATEWAY_TOKEN` is not set, the gateway prints a generated local token at startup.
+If neither config nor `CODEX_GATEWAY_TOKEN` is set, the gateway prints a generated local token at startup.
 
 ## Implemented
 
