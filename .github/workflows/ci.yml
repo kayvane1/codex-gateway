@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_contract_tests:
+        description: Run opt-in Codex app-server contract tests
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  quality:
+    name: Python ${{ matrix.python-version }} quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev --frozen
+      - run: uv run --group dev ruff check src tests
+      - run: uv run --group dev pytest -m "not integration" tests
+
+  package:
+    name: Build and inspect package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev --frozen
+      - run: uv build
+      - run: uvx twine check dist/*.whl dist/*.tar.gz
+
+  contract:
+    name: Opt-in Codex app-server contract
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_contract_tests }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev --frozen
+      - name: Verify Codex CLI is available
+        run: |
+          codex --version
+          codex app-server --help
+      - name: Run live contract tests
+        env:
+          CODEX_GATEWAY_RUN_CONTRACT_TESTS: "1"
+        run: uv run --group dev pytest -m integration tests/test_contract.py

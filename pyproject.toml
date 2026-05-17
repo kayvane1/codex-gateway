@@ -4,10 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-gateway"
-version = "0.1.2"
+version = "0.2.0"
 description = "Local OpenAI-compatible FastAPI gateway for Codex app-server."
 readme = "README.md"
 requires-python = ">=3.11"
+keywords = [
+  "app-server",
+  "codex",
+  "fastapi",
+  "gateway",
+  "openai-sdk",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "fastapi>=0.104",
   "httpx>=0.25",
@@ -22,10 +40,11 @@ codex-gateway = "codex_gateway.server:main"
 Homepage = "https://github.com/kayvane1/codex-gateway"
 Repository = "https://github.com/kayvane1/codex-gateway"
 Issues = "https://github.com/kayvane1/codex-gateway/issues"
+Changelog = "https://github.com/kayvane1/codex-gateway/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
-  "openai>=1.3",
+  "openai>=2.0",
   "pre-commit>=3.6",
   "pytest>=7.4",
   "pytest-cov>=4.1",
@@ -48,6 +67,11 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["codex_gateway*"]
+exclude = ["generated*", "tests*"]
+
+[tool.setuptools]
+include-package-data = false
 
 [tool.coverage.run]
 branch = true

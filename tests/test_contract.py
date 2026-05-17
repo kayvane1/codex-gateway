@@ -113,6 +113,13 @@ def test_openai_sdk_models_non_streaming_and_streaming_chat(gateway_server: str)
     assert image_completion.choices[0].message.role == "assistant"
     assert "image-pong" in (image_completion.choices[0].message.content or "").lower()
 
+    response = client.responses.create(
+        model=model,
+        input="Reply with exactly: response-pong",
+    )
+    assert response.object == "response"
+    assert "response-pong" in response.output_text.lower()
+
     stream = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": "Reply with exactly: stream-pong"}],

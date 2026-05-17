@@ -1,0 +1,11 @@
+include CHANGELOG.md
+include README.md
+include pyproject.toml
+prune .github
+prune build
+prune dist
+prune generated
+prune tests
+global-exclude .DS_Store
+global-exclude *.py[cod]
+global-exclude __pycache__

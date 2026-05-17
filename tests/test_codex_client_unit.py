@@ -15,6 +15,7 @@ from codex_gateway._codex_turn_lifecycle import CodexTurnLifecycle, openai_usage
 from codex_gateway.codex_client import (
     CodexAppServer,
     CodexAppServerError,
+    CodexAppServerProtocolError,
     CodexChatResult,
     CodexClientSettings,
     CodexTurnTimeout,
@@ -82,6 +83,15 @@ class FakeClientSession:
             if self.unsubscribe_error:
                 raise self.unsubscribe_error
             return {"status": "unsubscribed"}
+        if method == "model/list":
+            return {"data": [{"id": "fake-model"}]}
+        if method == "initialize":
+            return {
+                "codexHome": "/tmp/codex-home",
+                "platformFamily": "unix",
+                "platformOs": "macos",
+                "userAgent": "codex-cli/0.128.0",
+            }
         return {}
 
     @asynccontextmanager
@@ -195,9 +205,12 @@ def test_subscriptions_and_response_handling() -> None:
 
         error_future = loop.create_future()
         stdio._pending[2] = error_future
+        stdio._pending_methods[2] = "model/list"
         stdio._handle_response({"id": 2, "error": {"message": "bad"}})
-        with pytest.raises(CodexAppServerError):
+        with pytest.raises(CodexAppServerProtocolError) as exc_info:
             error_future.result()
+        assert exc_info.value.method == "model/list"
+        assert "model/list failed: bad" in str(exc_info.value)
 
         stdio._handle_response({"id": 999, "result": {}})
 
@@ -340,7 +353,7 @@ def test_client_start_stop_and_chat_delegation_are_bounded_to_high_level_api() -
         await codex.start()
         await codex.start()
         assert fake_session.started == 1
-        assert [call[0] for call in fake_session.requests] == ["initialize"]
+        assert [call[0] for call in fake_session.requests] == ["initialize", "model/list"]
 
         input_items = build_text_input("hi")
         result = await codex.complete_chat(
@@ -350,7 +363,7 @@ def test_client_start_stop_and_chat_delegation_are_bounded_to_high_level_api() -
             developer_instructions="dev",
         )
         assert result.text == "delegated"
-        assert fake_lifecycle.completed == [("thread-2", input_items)]
+        assert fake_lifecycle.completed == [("thread-3", input_items)]
 
         chunks = [
             chunk
@@ -362,9 +375,10 @@ def test_client_start_stop_and_chat_delegation_are_bounded_to_high_level_api() -
             )
         ]
         assert chunks == ["stream-", "delegated"]
-        assert fake_lifecycle.streamed == [("thread-4", input_items)]
+        assert fake_lifecycle.streamed == [("thread-5", input_items)]
         assert [call[0] for call in fake_session.requests] == [
             "initialize",
+            "model/list",
             "thread/start",
             "thread/unsubscribe",
             "thread/start",
@@ -416,8 +430,9 @@ def test_client_injects_history_and_unsubscribes_after_success_and_errors() -> N
         assert cleanup_result.text == "delegated"
         fake_session.unsubscribe_error = None
 
+        fake_session.unsubscribe_error = CodexAppServerError("cleanup failed")
         fake_lifecycle.complete_error = CodexAppServerError("turn failed")
-        with pytest.raises(CodexAppServerError):
+        with pytest.raises(CodexAppServerError, match="turn failed"):
             await codex.complete_chat(
                 model="m",
                 history_items=[],

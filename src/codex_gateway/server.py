@@ -36,8 +36,13 @@ from .chat_contract import (
 from .codex_client import (
     CodexAppServer,
     CodexAppServerError,
+    CodexChatAdmissionCancelled,
+    CodexChatAdmissionTimeout,
+    CodexChatOverloaded,
     CodexClientSettings,
+    CodexTurnTimeout,
 )
+from .responses_contract import prepare_response_turn, response_payload
 
 LOCAL_TOKEN_PREFIX = "codex-gateway-local-"
 CONFIG_ENV_VAR = "CODEX_GATEWAY_CONFIG"
@@ -56,6 +61,9 @@ class GatewaySettings:
     request_timeout_seconds: float = 30.0
     turn_timeout_seconds: float = 180.0
     reasoning_effort: str = "low"
+    chat_max_active_turns: int = 1
+    chat_max_pending_turns: int | None = None
+    chat_admission_timeout_seconds: float | None = None
     generated_token: bool = False
 
 
@@ -70,6 +78,9 @@ def create_app(settings: GatewaySettings) -> FastAPI:
             request_timeout_seconds=settings.request_timeout_seconds,
             turn_timeout_seconds=settings.turn_timeout_seconds,
             reasoning_effort=settings.reasoning_effort,
+            chat_max_active_turns=settings.chat_max_active_turns,
+            chat_max_pending_turns=settings.chat_max_pending_turns,
+            chat_admission_timeout_seconds=settings.chat_admission_timeout_seconds,
         )
     )
 
@@ -84,7 +95,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
 
     app = FastAPI(
         title="Codex Gateway",
-        version="0.1.2",
+        version="0.2.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -116,7 +127,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
         try:
             models = await request.app.state.codex.list_models()
         except CodexAppServerError as exc:
-            return raise_openai_error(502, str(exc), "codex_app_server_error", "codex_error")
+            return raise_openai_error(*_codex_openai_error_args(exc))
         return {
             "object": "list",
             "data": [
@@ -158,7 +169,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                 developer_instructions=turn.developer_instructions,
             )
         except CodexAppServerError as exc:
-            return _openai_error_response(502, str(exc), "codex_app_server_error", "codex_error")
+            return _codex_error_response(exc)
 
         created = int(time.time())
         return JSONResponse(
@@ -167,6 +178,38 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                 created=created,
                 model=turn.model,
                 result=result,
+            )
+        )
+
+    @app.post("/v1/responses", dependencies=[Depends(require_auth)], response_model=None)
+    async def responses(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return _openai_error_response(
+                400, "Request body must be valid JSON.", "invalid_request_error", "invalid_json"
+            )
+        turn = prepare_response_turn(body)
+
+        try:
+            result = await request.app.state.codex.complete_chat(
+                model=turn.model,
+                history_items=turn.history_items,
+                input_items=turn.input_items,
+                developer_instructions=turn.developer_instructions,
+            )
+        except CodexAppServerError as exc:
+            return _codex_error_response(exc)
+
+        created = int(time.time())
+        return JSONResponse(
+            response_payload(
+                response_id=f"resp_codex_{secrets.token_urlsafe(12)}",
+                message_id=f"msg_codex_{secrets.token_urlsafe(12)}",
+                created_at=created,
+                model=turn.model,
+                result=result,
+                instructions=turn.instructions,
             )
         )
 
@@ -191,7 +234,8 @@ async def _stream_openai_chunks(
         ):
             yield sse(stream_delta_payload(completion_id=completion_id, created=created, model=turn.model, delta=delta))
     except CodexAppServerError as exc:
-        yield sse(stream_error_payload(message=str(exc)))
+        _status_code, message, error_type, code, _headers = _codex_openai_error_args(exc)
+        yield sse(stream_error_payload(message=message, error_type=error_type, code=code))
         yield sse_done()
         return
 
@@ -211,6 +255,24 @@ def _openai_error_response(
         headers=headers,
         content=openai_error_payload(message, error_type, code),
     )
+
+
+def _codex_error_response(exc: CodexAppServerError) -> JSONResponse:
+    return _openai_error_response(*_codex_openai_error_args(exc))
+
+
+def _codex_openai_error_args(
+    exc: CodexAppServerError,
+) -> tuple[int, str, str, str | None, dict[str, str] | None]:
+    if isinstance(exc, CodexChatOverloaded):
+        return 429, str(exc), "rate_limit_error", "codex_chat_overloaded", {"Retry-After": "1"}
+    if isinstance(exc, CodexChatAdmissionTimeout):
+        return 504, str(exc), "codex_timeout_error", "codex_chat_admission_timeout", None
+    if isinstance(exc, CodexTurnTimeout):
+        return 504, str(exc), "codex_timeout_error", "codex_turn_timeout", None
+    if isinstance(exc, CodexChatAdmissionCancelled):
+        return 499, str(exc), "request_cancelled", "codex_chat_admission_cancelled", None
+    return 502, str(exc), "codex_app_server_error", "codex_error", None
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

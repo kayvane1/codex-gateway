@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 from dataclasses import dataclass
 from typing import Any
 
 from ._codex_shared import CodexChatResult, build_text_input
+from .safety_policy import SafetyPolicyViolation, parse_data_image_url, validate_image_url
 
 
 class OpenAIContractError(Exception):
@@ -37,8 +36,6 @@ SUPPORTED_CHAT_FIELDS = {"model", "messages", "stream", "n"}
 
 
 OPENAI_IMAGE_DETAILS = {"auto", "low", "high"}
-SUPPORTED_IMAGE_URL_PREFIXES = ("http://", "https://", "data:image/")
-MAX_DATA_IMAGE_BYTES = 20 * 1024 * 1024
 
 
 def prepare_chat_turn(body: dict[str, Any]) -> ChatTurn:
@@ -105,8 +102,13 @@ def stream_stop_payload(*, completion_id: str, created: int, model: str) -> dict
     }
 
 
-def stream_error_payload(*, message: str) -> dict[str, Any]:
-    return {"error": {"message": message, "type": "codex_app_server_error", "code": "codex_error"}}
+def stream_error_payload(
+    *,
+    message: str,
+    error_type: str = "codex_app_server_error",
+    code: str | None = "codex_error",
+) -> dict[str, Any]:
+    return {"error": {"message": message, "type": error_type, "code": code}}
 
 
 def sse(payload: dict[str, Any]) -> bytes:
@@ -298,15 +300,7 @@ def _extract_image_content_part(part: dict[str, Any], message_index: int, part_i
             "invalid_request_error",
             "invalid_image_url",
         )
-    if not image_url["url"].startswith(SUPPORTED_IMAGE_URL_PREFIXES):
-        raise_openai_error(
-            400,
-            f"`messages[{message_index}].content[{part_index}].image_url.url` must be an http(s) URL or image data URL.",
-            "invalid_request_error",
-            "invalid_image_url",
-        )
-    if image_url["url"].startswith("data:image/"):
-        _validate_data_image_url(image_url["url"], message_index, part_index)
+    _validate_image_url(image_url["url"], message_index, part_index)
     detail = image_url.get("detail")
     if detail is not None and detail not in OPENAI_IMAGE_DETAILS:
         raise_openai_error(
@@ -322,30 +316,23 @@ def _extract_image_content_part(part: dict[str, Any], message_index: int, part_i
 
 
 def _validate_data_image_url(url: str, message_index: int, part_index: int) -> None:
-    prefix, separator, encoded = url.partition(",")
-    if separator != "," or not prefix.endswith(";base64") or not encoded:
-        raise_openai_error(
-            400,
-            f"`messages[{message_index}].content[{part_index}].image_url.url` must be a base64 image data URL.",
-            "invalid_request_error",
-            "invalid_image_url",
-        )
-    if len(encoded) * 3 // 4 > MAX_DATA_IMAGE_BYTES:
-        raise_openai_error(
-            400,
-            f"`messages[{message_index}].content[{part_index}].image_url.url` exceeds the 20MB image limit.",
-            "invalid_request_error",
-            "image_too_large",
-        )
+    param = f"messages[{message_index}].content[{part_index}].image_url.url"
     try:
-        base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError):
-        raise_openai_error(
-            400,
-            f"`messages[{message_index}].content[{part_index}].image_url.url` contains invalid base64 image data.",
-            "invalid_request_error",
-            "invalid_image_url",
-        )
+        parse_data_image_url(url, param=param)
+    except SafetyPolicyViolation as exc:
+        _raise_safety_policy_violation(exc)
+
+
+def _validate_image_url(url: str, message_index: int, part_index: int) -> None:
+    param = f"messages[{message_index}].content[{part_index}].image_url.url"
+    try:
+        validate_image_url(url, param=param)
+    except SafetyPolicyViolation as exc:
+        _raise_safety_policy_violation(exc)
+
+
+def _raise_safety_policy_violation(exc: SafetyPolicyViolation) -> None:
+    raise_openai_error(exc.status_code, exc.message, exc.error_type, exc.code)
 
 
 def _extract_text_content(content: Any, index: int) -> str:

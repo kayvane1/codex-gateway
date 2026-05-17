@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import base64
 import contextlib
 import tempfile
 from collections.abc import AsyncIterator, Iterator
@@ -11,30 +9,44 @@ from typing import Any
 from ._app_server_stdio_session import AppServerStdioSession
 from ._codex_shared import (
     CodexAppServerError,
+    CodexAppServerProtocolError,
     CodexChatResult,
     CodexClientSettings,
+    CodexProtocolCompatibilityError,
     CodexTurnTimeout,
     build_text_input,
 )
 from ._codex_turn_lifecycle import CodexTurnLifecycle
+from .protocol_compat import ProtocolCompatibilityPreflight, ProtocolCompatibilityReport
+from .safety_policy import (
+    is_data_image_url,
+    parse_data_image_url,
+    thread_start_safety_params,
+    turn_start_params_with_safety,
+)
+from .thread_lifetime import (
+    ChatAdmissionPolicy,
+    CodexChatAdmissionCancelled,
+    CodexChatAdmissionError,
+    CodexChatAdmissionTimeout,
+    CodexChatOverloaded,
+    ThreadLifetime,
+)
 
 __all__ = [
     "CodexAppServer",
     "CodexAppServerError",
+    "CodexAppServerProtocolError",
+    "CodexChatAdmissionCancelled",
+    "CodexChatAdmissionError",
+    "CodexChatAdmissionTimeout",
     "CodexChatResult",
+    "CodexChatOverloaded",
     "CodexClientSettings",
+    "CodexProtocolCompatibilityError",
     "CodexTurnTimeout",
     "build_text_input",
 ]
-
-DATA_IMAGE_PREFIX = "data:image/"
-IMAGE_EXTENSION_BY_MEDIA_SUBTYPE = {
-    "jpeg": "jpg",
-    "jpg": "jpg",
-    "png": "png",
-    "gif": "gif",
-    "webp": "webp",
-}
 
 
 class _SafetyBoundTurnSession:
@@ -49,34 +61,11 @@ class _SafetyBoundTurnSession:
         timeout: float | None = None,
     ) -> Any:
         if method == "turn/start":
-            params = _turn_start_params_with_safety(params)
+            params = turn_start_params_with_safety(params)
         return await self._session.request(method, params, timeout=timeout)
 
     def subscribe(self, thread_id: str) -> Any:
         return self._session.subscribe(thread_id)
-
-
-def _thread_start_safety_params() -> dict[str, Any]:
-    return {
-        "approvalPolicy": "never",
-        "approvalsReviewer": "user",
-        "sandbox": "read-only",
-        "environments": [],
-        "dynamicTools": [],
-    }
-
-
-def _turn_start_params_with_safety(params: dict[str, Any] | None) -> dict[str, Any]:
-    safe_params = dict(params or {})
-    safe_params.update(
-        {
-            "approvalPolicy": "never",
-            "approvalsReviewer": "user",
-            "environments": [],
-            "sandboxPolicy": {"type": "readOnly", "networkAccess": False},
-        }
-    )
-    return safe_params
 
 
 class CodexAppServer:
@@ -96,31 +85,33 @@ class CodexAppServer:
             turn_timeout_seconds=self.settings.turn_timeout_seconds,
             reasoning_effort=self.settings.reasoning_effort,
         )
-        self._chat_lock = asyncio.Lock()
+        self._thread_lifetime = ThreadLifetime(
+            ChatAdmissionPolicy(
+                max_active_turns=self.settings.chat_max_active_turns,
+                max_pending_turns=self.settings.chat_max_pending_turns,
+                timeout_seconds=self._chat_admission_timeout_seconds(),
+            )
+        )
         self._initialized = False
+        self._preflight_report: ProtocolCompatibilityReport | None = None
 
     async def start(self) -> None:
         if self._initialized:
             return
-        await self._session.start()
-        await self.request(
-            "initialize",
-            {
-                "clientInfo": {
-                    "name": "codex-gateway",
-                    "title": "Codex Gateway",
-                    "version": "0.1.2",
-                },
-                "capabilities": {
-                    "experimentalApi": True,
-                    "optOutNotificationMethods": [],
-                },
-            },
-        )
+        try:
+            self._preflight_report = await ProtocolCompatibilityPreflight(
+                session=self._session,
+                settings=self.settings,
+            ).run()
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self._session.stop()
+            raise
         self._initialized = True
 
     async def stop(self) -> None:
         self._initialized = False
+        self._preflight_report = None
         await self._session.stop()
 
     async def request(
@@ -143,14 +134,13 @@ class CodexAppServer:
         input_items: list[dict[str, Any]],
         developer_instructions: str,
     ) -> CodexChatResult:
-        async with self._chat_lock:
-            thread_id = await self._start_thread(model, developer_instructions)
-            try:
-                await self._inject_history(thread_id, history_items)
-                with _materialize_data_image_inputs(input_items) as prepared_input_items:
-                    return await self._turn_lifecycle.complete(thread_id, prepared_input_items)
-            finally:
-                await self._unsubscribe_thread(thread_id)
+        async with self._thread_lifetime.chat_thread(
+            start_thread=lambda: self._start_thread(model, developer_instructions),
+            cleanup_thread=self._unsubscribe_thread,
+        ) as thread_id:
+            await self._inject_history(thread_id, history_items)
+            with _materialize_data_image_inputs(input_items) as prepared_input_items:
+                return await self._turn_lifecycle.complete(thread_id, prepared_input_items)
 
     async def stream_chat(
         self,
@@ -160,15 +150,19 @@ class CodexAppServer:
         input_items: list[dict[str, Any]],
         developer_instructions: str,
     ) -> AsyncIterator[str]:
-        async with self._chat_lock:
-            thread_id = await self._start_thread(model, developer_instructions)
-            try:
-                await self._inject_history(thread_id, history_items)
-                with _materialize_data_image_inputs(input_items) as prepared_input_items:
-                    async for delta in self._turn_lifecycle.stream(thread_id, prepared_input_items):
-                        yield delta
-            finally:
-                await self._unsubscribe_thread(thread_id)
+        async with self._thread_lifetime.chat_thread(
+            start_thread=lambda: self._start_thread(model, developer_instructions),
+            cleanup_thread=self._unsubscribe_thread,
+        ) as thread_id:
+            await self._inject_history(thread_id, history_items)
+            with _materialize_data_image_inputs(input_items) as prepared_input_items:
+                async for delta in self._turn_lifecycle.stream(thread_id, prepared_input_items):
+                    yield delta
+
+    def _chat_admission_timeout_seconds(self) -> float | None:
+        if self.settings.chat_admission_timeout_seconds is not None:
+            return self.settings.chat_admission_timeout_seconds
+        return self.settings.request_timeout_seconds
 
     async def _start_thread(self, model: str, developer_instructions: str) -> str:
         response = await self.request(
@@ -176,12 +170,7 @@ class CodexAppServer:
             {
                 "model": model,
                 "cwd": str(self.settings.cwd),
-                **_thread_start_safety_params(),
-                "baseInstructions": (
-                    "You are a text-only assistant behind a local OpenAI-compatible "
-                    "compatibility gateway. Answer directly in plain text. Do not execute "
-                    "shell commands, read or write files, call tools, or request approvals."
-                ),
+                **thread_start_safety_params(),
                 "developerInstructions": developer_instructions,
                 "ephemeral": True,
                 "experimentalRawEvents": False,
@@ -225,16 +214,15 @@ def _materialize_data_image_inputs(input_items: list[dict[str, Any]]) -> Iterato
             if (
                 item.get("type") != "image"
                 or not isinstance(item.get("url"), str)
-                or not item["url"].startswith(DATA_IMAGE_PREFIX)
+                or not is_data_image_url(item["url"])
             ):
                 prepared_items.append(item)
                 continue
 
             tempdir = tempdir or tempfile.TemporaryDirectory(prefix="codex-gateway-images-")
-            media_type, encoded = item["url"].split(",", 1)
-            extension = _image_extension(media_type)
-            image_path = Path(tempdir.name) / f"image-{image_index}.{extension}"
-            image_path.write_bytes(base64.b64decode(encoded, validate=True))
+            data_image = parse_data_image_url(item["url"], param="image_url.url")
+            image_path = Path(tempdir.name) / f"image-{image_index}.{data_image.extension}"
+            image_path.write_bytes(data_image.data)
             prepared_items.append({"type": "localImage", "path": str(image_path)})
             image_index += 1
 
@@ -242,8 +230,3 @@ def _materialize_data_image_inputs(input_items: list[dict[str, Any]]) -> Iterato
     finally:
         if tempdir is not None:
             tempdir.cleanup()
-
-
-def _image_extension(media_type: str) -> str:
-    subtype = media_type.removeprefix("data:image/").removesuffix(";base64").lower()
-    return IMAGE_EXTENSION_BY_MEDIA_SUBTYPE.get(subtype, "img")

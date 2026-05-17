@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import re
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,7 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ._codex_shared import CodexAppServerError
+from ._codex_shared import CodexAppServerError, CodexAppServerProtocolError, redact_secrets
+from .safety_policy import app_server_request_denial
 
 
 @dataclass(frozen=True)
@@ -20,19 +20,8 @@ class AppServerSubscription:
     queue: asyncio.Queue[dict[str, Any]]
 
 
-_SECRET_PATTERNS = (
-    re.compile(r"sk-[A-Za-z0-9_\-]+"),
-    re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.IGNORECASE),
-    re.compile(r"(access[_-]?token[\"'=:\s]+)[A-Za-z0-9._\-]+", re.IGNORECASE),
-    re.compile(r"(refresh[_-]?token[\"'=:\s]+)[A-Za-z0-9._\-]+", re.IGNORECASE),
-)
-
-
 def _redact(value: str) -> str:
-    redacted = value
-    for pattern in _SECRET_PATTERNS:
-        redacted = pattern.sub(lambda match: f"{match.group(1) if match.groups() else ''}[redacted]", redacted)
-    return redacted
+    return redact_secrets(value)
 
 
 class AppServerStdioSession:
@@ -52,6 +41,7 @@ class AppServerStdioSession:
         self._stdout_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._pending: dict[int, asyncio.Future[Any]] = {}
+        self._pending_methods: dict[int, str] = {}
         self._subscriptions: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
         self._send_lock = asyncio.Lock()
         self._next_id = 1
@@ -83,6 +73,7 @@ class AppServerStdioSession:
             if not future.done():
                 future.set_exception(CodexAppServerError("Codex app-server stopped."))
         self._pending.clear()
+        self._pending_methods.clear()
         self._subscriptions.clear()
 
         if process is not None and process.returncode is None:
@@ -116,6 +107,7 @@ class AppServerStdioSession:
         self._next_id += 1
         future: asyncio.Future[Any] = loop.create_future()
         self._pending[request_id] = future
+        self._pending_methods[request_id] = method
 
         message: dict[str, Any] = {"id": request_id, "method": method}
         if params is not None:
@@ -132,6 +124,7 @@ class AppServerStdioSession:
             )
         finally:
             self._pending.pop(request_id, None)
+            self._pending_methods.pop(request_id, None)
 
     @asynccontextmanager
     async def subscribe(self, thread_id: str) -> AsyncIterator[asyncio.Queue[dict[str, Any]]]:
@@ -198,7 +191,20 @@ class AppServerStdioSession:
         if future is None or future.done():
             return
         if "error" in message:
-            future.set_exception(CodexAppServerError(str(message["error"])))
+            error = message["error"]
+            method = self._pending_methods.get(message["id"])
+            if isinstance(error, dict):
+                code = error.get("code")
+                future.set_exception(
+                    CodexAppServerProtocolError(
+                        str(error.get("message") or error),
+                        code=code if isinstance(code, int) else None,
+                        data=error.get("data"),
+                        method=method,
+                    )
+                )
+            else:
+                future.set_exception(CodexAppServerProtocolError(str(error), method=method))
         else:
             future.set_result(message.get("result"))
 
@@ -213,30 +219,7 @@ class AppServerStdioSession:
             queue.put_nowait(message)
 
     async def _handle_server_request(self, message: dict[str, Any]) -> None:
-        method = message.get("method")
-        request_id = message["id"]
-        if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
-            await self._send_result(request_id, {"decision": "decline"})
-        elif method == "item/permissions/requestApproval":
-            await self._send_result(
-                request_id,
-                {"permissions": {}, "scope": "turn", "strictAutoReview": True},
-            )
-        elif method in {"applyPatchApproval", "execCommandApproval"}:
-            await self._send_result(request_id, {"decision": "denied"})
-        elif method == "item/tool/requestUserInput":
-            await self._send_result(request_id, {"answers": {}})
-        elif method == "mcpServer/elicitation/request":
-            await self._send_result(request_id, {"action": "decline", "content": None, "_meta": None})
-        elif method == "item/tool/call":
-            await self._send_result(request_id, {"contentItems": [], "success": False})
-        elif method == "account/chatgptAuthTokens/refresh":
-            await self._send_error(
-                request_id,
-                "Codex auth token refresh is not supported by the local OpenAI gateway.",
-            )
-        else:
-            await self._send_error(request_id, f"Server request {method!r} is not supported.")
+        await self._send_raw(app_server_request_denial(message))
 
     async def _send_result(self, request_id: Any, result: dict[str, Any]) -> None:
         await self._send_raw({"id": request_id, "result": result})

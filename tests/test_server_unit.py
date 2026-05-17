@@ -15,7 +15,14 @@ from codex_gateway.chat_contract import (
     _validate_chat_body,
     sse,
 )
-from codex_gateway.codex_client import CodexAppServerError, CodexChatResult
+from codex_gateway.codex_client import (
+    CodexAppServerError,
+    CodexChatAdmissionCancelled,
+    CodexChatAdmissionTimeout,
+    CodexChatOverloaded,
+    CodexChatResult,
+    CodexTurnTimeout,
+)
 from codex_gateway.server import (
     LOCAL_TOKEN_PREFIX,
     GatewaySettings,
@@ -242,7 +249,7 @@ def test_sse_uses_openai_data_framing() -> None:
     assert sse({"hello": "world"}) == b'data: {"hello":"world"}\n\n'
 
 
-@pytest.mark.parametrize("endpoint", ["/v1/models", "/v1/chat/completions"])
+@pytest.mark.parametrize("endpoint", ["/v1/models", "/v1/chat/completions", "/v1/responses"])
 def test_http_auth_rejects_missing_token(endpoint: str) -> None:
     async def run() -> None:
         app = create_app(GatewaySettings(token="token"))
@@ -251,6 +258,8 @@ def test_http_auth_rejects_missing_token(endpoint: str) -> None:
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             if endpoint.endswith("models"):
                 response = await client.get(endpoint)
+            elif endpoint.endswith("responses"):
+                response = await client.post(endpoint, json={"model": "m", "input": "hi"})
             else:
                 response = await client.post(
                     endpoint, json={"model": "m", "messages": [{"role": "user", "content": "hi"}]}
@@ -387,6 +396,41 @@ def test_http_endpoints_cover_success_and_error_branches() -> None:
             )
             assert completion_error.status_code == 502
             assert completion_error.json()["error"]["type"] == "codex_app_server_error"
+            fake.complete_error = CodexChatOverloaded("Codex chat capacity is full.")
+            overloaded = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+            assert overloaded.status_code == 429
+            assert overloaded.headers["retry-after"] == "1"
+            assert overloaded.json()["error"]["code"] == "codex_chat_overloaded"
+            fake.complete_error = CodexTurnTimeout("Timed out waiting for Codex assistant output.")
+            timeout = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+            assert timeout.status_code == 504
+            assert timeout.json()["error"]["code"] == "codex_turn_timeout"
+            fake.complete_error = CodexChatAdmissionTimeout("Timed out waiting for a free Codex chat slot.")
+            admission_timeout = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+            assert admission_timeout.status_code == 504
+            assert admission_timeout.json()["error"]["type"] == "codex_timeout_error"
+            assert admission_timeout.json()["error"]["code"] == "codex_chat_admission_timeout"
+            fake.complete_error = CodexChatAdmissionCancelled("Cancelled while waiting for a free Codex chat slot.")
+            admission_cancelled = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+            assert admission_cancelled.status_code == 499
+            assert admission_cancelled.json()["error"]["type"] == "request_cancelled"
+            assert admission_cancelled.json()["error"]["code"] == "codex_chat_admission_cancelled"
             fake.complete_error = None
 
             stream = await client.post(
@@ -407,6 +451,23 @@ def test_http_endpoints_cover_success_and_error_branches() -> None:
             )
             assert "stream failed" in stream_error.text
             assert stream_error.text.endswith("data: [DONE]\n\n")
+            fake.stream_error = CodexChatAdmissionTimeout("Timed out waiting for a free Codex chat slot.")
+            stream_admission_timeout = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={"model": "m", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            )
+            assert '"type":"codex_timeout_error"' in stream_admission_timeout.text
+            assert '"code":"codex_chat_admission_timeout"' in stream_admission_timeout.text
+            fake.stream_error = CodexChatAdmissionCancelled("Cancelled while waiting for a free Codex chat slot.")
+            stream_admission_cancelled = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={"model": "m", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            )
+            assert '"type":"request_cancelled"' in stream_admission_cancelled.text
+            assert '"code":"codex_chat_admission_cancelled"' in stream_admission_cancelled.text
+            fake.stream_error = None
 
             image_completion = await client.post(
                 "/v1/chat/completions",
