@@ -132,7 +132,14 @@ uv run --group dev pre-commit install
 uv run --group dev pre-commit run --all-files
 ```
 
-The generated Codex app-server JSON Schema and TypeScript protocol references used for this implementation are in `generated/`.
+The checked-in Codex app-server JSON Schema protocol reference used for this implementation is in `generated/app-server-json-schema/`.
+The TypeScript protocol reference is intentionally not committed; regenerate it locally when needed:
+
+```bash
+uv run codex-gateway generate-ts
+```
+
+This writes ignored files to `generated/app-server-ts/` by default. Pass `--out <dir>` to use a different location.
 
 ## Release Checklist
 
@@ -142,5 +149,5 @@ The generated Codex app-server JSON Schema and TypeScript protocol references us
 - Run `uv run --group dev ruff check src tests`.
 - Run `uv build` and `uvx twine check dist/*.whl dist/*.tar.gz`.
 - Run contract tests only when a runner has Codex CLI/app-server and auth: `CODEX_GATEWAY_RUN_CONTRACT_TESTS=1 uv run --group dev pytest -m integration tests/test_contract.py`.
-- Confirm generated protocol artifacts are unchanged unless the release is intentionally updating the protocol snapshot.
+- Confirm generated JSON Schema protocol artifacts are unchanged unless the release is intentionally updating the protocol snapshot.
 - Do not publish publicly until an explicit repository license has been selected and added.

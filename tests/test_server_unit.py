@@ -623,3 +623,38 @@ def test_settings_and_main_cli_paths(
     assert "export CODEX_GATEWAY_TOKEN=env-token\n" in captured.out
     assert "OPENAI_API_KEY" not in captured.out
     assert calls[-1]["port"] == 8131
+
+
+def test_generate_ts_cli_wraps_codex_generator(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    run_calls: list[dict[str, Any]] = []
+
+    def fake_run(command: list[str], *, check: bool) -> None:
+        run_calls.append({"command": command, "check": check})
+
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+    out_dir = tmp_path / "app-server-ts"
+    prettier = tmp_path / "prettier"
+
+    main(["generate-ts", "--out", str(out_dir), "--prettier", str(prettier)])
+
+    captured = capsys.readouterr()
+    assert run_calls == [
+        {
+            "command": [
+                "codex",
+                "app-server",
+                "generate-ts",
+                "--experimental",
+                "--out",
+                str(out_dir),
+                "--prettier",
+                str(prettier),
+            ],
+            "check": True,
+        }
+    ]
+    assert f"Generated Codex app-server TypeScript bindings in: {out_dir}" in captured.out

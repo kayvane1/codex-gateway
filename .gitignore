@@ -7,3 +7,4 @@ dist/
 build/
 .coverage
 .ruff_cache/
+generated/app-server-ts/

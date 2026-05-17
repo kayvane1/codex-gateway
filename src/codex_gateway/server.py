@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import shlex
+import subprocess
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -49,6 +50,7 @@ CONFIG_ENV_VAR = "CODEX_GATEWAY_CONFIG"
 CONFIG_DIR_NAME = "codex-gateway"
 CONFIG_FILE_NAME = "config.json"
 CONFIG_FILE_MODE = 0o600
+GENERATED_PROTOCOL_TS_DIR = Path("generated") / "app-server-ts"
 
 
 @dataclass(frozen=True)
@@ -280,10 +282,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["env", "init", "show", "token"],
+        choices=["env", "generate-ts", "init", "show", "token"],
         help=(
             "Use `init` to create local config, `show` to print SDK setup, `env` to print shell exports, "
-            "or `token` to print a bearer token instead of starting the server."
+            "`generate-ts` to regenerate ignored protocol TypeScript bindings, or `token` to print a bearer token "
+            "instead of starting the server."
         ),
     )
     parser.add_argument("--host")
@@ -293,6 +296,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reasoning-effort")
     parser.add_argument("--config", type=Path, help=f"Config path. Defaults to ${CONFIG_ENV_VAR} or XDG config.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing config when used with `init`.")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help="Output directory for `generate-ts`. Defaults to generated/app-server-ts.",
+    )
+    parser.add_argument("--prettier", type=Path, help="Optional Prettier executable for `generate-ts`.")
     return parser
 
 
@@ -441,9 +450,34 @@ def _init_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
     print(f"Wrote Codex Gateway config to: {path}\n\n{_sdk_setup_snippet(settings)}")
 
 
+def _generate_protocol_ts(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    out_dir = args.out or GENERATED_PROTOCOL_TS_DIR
+    command = [
+        "codex",
+        "app-server",
+        "generate-ts",
+        "--experimental",
+        "--out",
+        str(out_dir),
+    ]
+    if args.prettier is not None:
+        command.extend(["--prettier", str(args.prettier)])
+
+    try:
+        subprocess.run(command, check=True)
+    except FileNotFoundError:
+        parser.error("Unable to find `codex` on PATH; install or update the Codex CLI to generate protocol types.")
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(exc.returncode) from exc
+    print(f"Generated Codex app-server TypeScript bindings in: {out_dir}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    if args.command == "generate-ts":
+        _generate_protocol_ts(args, parser)
+        return
     if args.command == "init":
         _init_config(args, parser)
         return
