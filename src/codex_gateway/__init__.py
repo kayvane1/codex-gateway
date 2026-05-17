@@ -1,5 +1,5 @@
-"""OpenAI-compatible local adapter for Codex app-server."""
+"""OpenAI-compatible local gateway for Codex app-server."""
 
 __all__ = ["__version__"]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

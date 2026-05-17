@@ -80,7 +80,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
 
     app = FastAPI(
         title="Codex Gateway",
-        version="0.1.0",
+        version="0.1.1",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,

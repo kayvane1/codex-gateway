@@ -21,14 +21,20 @@ print(client.chat.completions.create(
 
 ## Run
 
-One-shot from GitHub with `uvx`, including local gateway environment variables:
+One-shot from PyPI:
 
 ```bash
-eval "$(uvx --from git+https://github.com/kayvane1/codex-gateway codex-gateway env)"
-uvx --from git+https://github.com/kayvane1/codex-gateway codex-gateway
+uvx codex-gateway
 ```
 
-`codex-gateway env` prints shell exports for `CODEX_GATEWAY_TOKEN`, `CODEX_GATEWAY_BASE_URL`, `CODEX_GATEWAY_HOST`, and `CODEX_GATEWAY_PORT`.
+When no token is configured, `codex-gateway` prints a generated local bearer token and the matching OpenAI SDK setup.
+For a reusable shell session, `codex-gateway env` prints exports for `CODEX_GATEWAY_TOKEN`, `CODEX_GATEWAY_BASE_URL`, `CODEX_GATEWAY_HOST`, and `CODEX_GATEWAY_PORT`:
+
+```bash
+eval "$(uvx codex-gateway env)"
+uvx codex-gateway
+```
+
 It does not write the generated local bearer token to disk. With those variables set, OpenAI SDK setup is three lines:
 
 ```python
