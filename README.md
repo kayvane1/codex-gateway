@@ -1,8 +1,104 @@
 # Codex Gateway
 
-**Experimental:** this is an early local compatibility gateway for Codex app-server. Treat the HTTP contract and safety model as unstable, review changes carefully before relying on it, and do not expose it outside loopback.
+Run OpenAI SDK examples locally using your Codex/ChatGPT subscription.
 
-Local FastAPI adapter that lets the official OpenAI Python SDK talk to `codex app-server` over stdio:
+`codex-gateway` is a small local server that speaks a subset of the OpenAI API and forwards requests to `codex app-server`. That means many examples written for the official OpenAI Python SDK can run with only a `base_url` change, without creating or using an OpenAI API key.
+
+It is useful for trying OpenAI cookbook snippets, SDK examples, prototypes, and small experiments when you already have Codex available through your ChatGPT account.
+
+> Experimental: this is a local compatibility gateway, not a production OpenAI API replacement. Keep it bound to loopback and expect the supported API surface, HTTP contract, and safety model to evolve.
+
+## What It Does
+
+Normally an OpenAI SDK example looks like this:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key="sk-...")
+```
+
+With `codex-gateway`, you point the same SDK at a local server instead:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="<local-gateway-token>",
+)
+```
+
+Your script still uses the official OpenAI SDK. The request goes to `codex-gateway`, which talks to your local `codex app-server` session.
+
+The token above is only a local gateway bearer token. It is not an OpenAI API key and is never proxied to Codex.
+
+## Why Use This?
+
+Use this project when you want to:
+
+- Try OpenAI cookbook examples without setting up OpenAI API billing.
+- Run small SDK experiments through your existing Codex/ChatGPT subscription.
+- Test code that uses `client.chat.completions.create(...)`.
+- Try simple `client.responses.create(...)` calls.
+- Keep example code close to the official OpenAI SDK shape.
+- Experiment locally before deciding whether you need the full OpenAI API.
+
+This is especially handy for learning, demos, and quick prototypes.
+
+## Requirements
+
+You need:
+
+- Python 3.11 or newer.
+- `uv` / `uvx`.
+- The Codex CLI installed and authenticated.
+- Access to `codex app-server`.
+- The official OpenAI Python SDK in the project or example you are running.
+
+## Quick Start
+
+Initialize the gateway once:
+
+```bash
+uvx codex-gateway init
+```
+
+Start the local gateway:
+
+```bash
+uvx codex-gateway
+```
+
+The gateway listens on:
+
+```text
+http://127.0.0.1:8000/v1
+```
+
+`codex-gateway init` writes `~/.config/codex-gateway/config.json` with a generated local bearer token and `0600` permissions. The server reads that config automatically on future runs.
+
+To print your SDK setup again later:
+
+```bash
+uvx codex-gateway show
+```
+
+For scripts that only need the token value:
+
+```bash
+uvx codex-gateway token
+```
+
+For shell-based setup:
+
+```bash
+uvx codex-gateway env
+```
+
+If neither config nor `CODEX_GATEWAY_TOKEN` is set, the gateway prints a generated local token at startup.
+
+## Example
 
 ```python
 from openai import OpenAI
@@ -12,53 +108,47 @@ client = OpenAI(
     api_key="<local-gateway-token>",
 )
 
-print(client.models.list())
-print(client.chat.completions.create(
+response = client.chat.completions.create(
     model="gpt-5.5",
-    messages=[{"role": "user", "content": "Say pong"}],
-))
-print(client.responses.create(
-    model="gpt-5.5",
-    input="Say pong",
-).output_text)
+    messages=[
+        {"role": "user", "content": "Say pong"},
+    ],
+)
+
+print(response.choices[0].message.content)
 ```
 
-## Run
-
-Initialize once, then start the gateway:
-
-```bash
-uvx codex-gateway init
-uvx codex-gateway
-```
-
-`codex-gateway init` writes `~/.config/codex-gateway/config.json` with a generated local bearer token and `0600` permissions, then prints the matching OpenAI SDK setup. The server reads that config automatically on future runs.
-
-To reprint the SDK setup later:
-
-```bash
-uvx codex-gateway show
-```
-
-The OpenAI SDK setup is three lines:
+Responses API text calls are also supported:
 
 ```python
-from openai import OpenAI
+response = client.responses.create(
+    model="gpt-5.5",
+    input="Say pong",
+)
 
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="<local-gateway-token>")
+print(response.output_text)
 ```
 
-For scripts that only need a token value, use `codex-gateway token`. `codex-gateway env` still prints shell exports for scripted use, but interactive setup should prefer `init` and `show`.
+## Using With Cookbooks Or SDK Examples
 
-For local development:
+Find where the example creates the OpenAI client:
 
-```bash
-uv sync --group dev
-uv run codex-gateway --port 8000
+```python
+client = OpenAI()
 ```
 
-The `api_key` is a local gateway bearer token. It is not an OpenAI API key and is never proxied to Codex.
-If neither config nor `CODEX_GATEWAY_TOKEN` is set, the gateway prints a generated local token at startup.
+Replace it with:
+
+```python
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="<local-gateway-token>",
+)
+```
+
+Then run the example as usual.
+
+Some examples use OpenAI API features this gateway does not support yet. When that happens, the gateway returns an explicit `400` error instead of pretending the feature worked.
 
 ## Compatibility
 
@@ -73,21 +163,53 @@ If neither config nor `CODEX_GATEWAY_TOKEN` is set, the gateway prints a generat
 
 No `LICENSE` file is currently present, so the package metadata intentionally does not declare a license. Choosing and adding a license is a release blocker before public package distribution.
 
-## Implemented
+## Supported API Surface
+
+Currently implemented:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `stream=True` SSE chunks compatible with `openai.OpenAI(...).chat.completions.create(..., stream=True)`
 - Multi-turn text chat history via Codex `thread/inject_items`
-- OpenAI `image_url` content parts in user messages, mapped to Codex image inputs/history. Image data URLs are materialized as temporary local files for the live Codex turn and cleaned up afterward.
-- Non-streaming Responses API text output for `client.responses.create(model=..., input="...")` and text-only message-style input.
+- OpenAI `image_url` content parts in user messages, mapped to Codex image inputs/history
+- Non-streaming Responses API text output for `client.responses.create(model=..., input="...")` and text-only message-style input
 - Local bearer-token authentication
 - Codex app-server stdio transport
 
+## Not Supported Yet
+
+This gateway intentionally supports only a small OpenAI-compatible subset. Unsupported features return a `400` instead of pretending to work.
+
+Unsupported features include:
+
+- Tools/functions
+- Built-in Responses tools
+- Tool choice
+- Background mode
+- Streaming Responses API calls
+- Parallel tool calls
+- Response formats
+- JSON/schema-constrained output
+- File inputs
+- Audio
+- `n > 1`
+- Logprobs
+- Sampling controls
+- Stop sequences
+- Token limits
+- Stored response/conversation state
+- Metadata storage
+- Non-chat/non-Responses APIs such as `/v1/embeddings` and legacy completions
+
 ## Safety Defaults
 
-- Binds to `127.0.0.1` by default.
+`codex-gateway` is designed for local experimentation.
+
+By default it:
+
+- Binds only to `127.0.0.1`.
+- Uses a local bearer token.
 - Starts ephemeral Codex threads with `sandbox="read-only"`, `approvalPolicy="never"`, no environments, and no dynamic tools.
 - Unsubscribes from each per-request thread after the API response finishes.
 - Accepts only `http://`, `https://`, and `data:image/...` image URLs; local file URLs are rejected.
@@ -95,23 +217,28 @@ No `LICENSE` file is currently present, so the package metadata intentionally do
 - Does not expose app-server filesystem, shell, config, auth, or account endpoints through the OpenAI-compatible HTTP API.
 - Does not print, persist, proxy, or expose Codex auth credentials.
 
-## Architecture
+Do not expose this server publicly.
 
-- `chat_contract.py` owns the OpenAI-facing chat subset: validation, text/image message conversion, history item construction, completion payloads, streaming chunks, SSE framing, and OpenAI-style errors.
-- `responses_contract.py` owns the OpenAI-facing Responses subset: validation, text-only message input conversion, response payloads, usage mapping, and explicit unsupported-feature errors.
-- `_app_server_stdio_session.py` owns the Codex app-server stdio transport: JSON-RPC request correlation, notification fan-out, stderr redaction, shutdown, and denial responses for privileged app-server requests.
-- `_codex_turn_lifecycle.py` owns Codex turn behavior: starting turns, collecting final assistant output, streaming assistant deltas, draining idle notifications, and mapping token usage.
-- `codex_client.py` is the high-level client used by FastAPI. It initializes the app-server session, lists models, starts ephemeral read-only Codex threads, injects prior text/image history, materializes image data URLs for live turns, delegates turn execution, and unsubscribes when finished.
-
-## Unsupported OpenAI Features
-
-This MVP returns a 400 instead of pretending to support features it cannot honor, including tools/functions, built-in Responses tools, tool choice, background mode, streaming Responses, parallel tool calls, response formats, JSON/schema-constrained output, file inputs, audio, `n > 1`, logprobs, sampling controls, stop sequences, token limits, stored response/conversation state, metadata storage, and non-chat/non-Responses APIs such as `/v1/embeddings` and legacy completions.
-
-## Tests
+## Local Development
 
 ```bash
 uv sync --group dev
+uv run codex-gateway --port 8000
+```
+
+Run tests:
+
+```bash
 uv run --group dev pytest -m "not integration" tests
+```
+
+Run linting:
+
+```bash
+uv run --group dev ruff check src tests
+uv run --group dev ruff format --check src tests
+uv run --group dev pre-commit install
+uv run --group dev pre-commit run --all-files
 ```
 
 Live contract tests are opt-in because they start the FastAPI gateway, launch `codex app-server` over stdio, and require working Codex auth:
@@ -121,16 +248,18 @@ CODEX_GATEWAY_RUN_CONTRACT_TESTS=1 uv run --group dev pytest -m integration test
 ```
 
 The contract tests instantiate the official OpenAI SDK with `base_url=.../v1`, call `/v1/models`, call non-streaming chat completions including a multi-turn message chain and image content part, call non-streaming Responses text output, call streaming SSE chat completions, and verify missing/invalid local bearer tokens are rejected.
+
 The coverage gate is configured at 95% in `pyproject.toml`.
 
-## Linting
+## Architecture
 
-```bash
-uv run --group dev ruff check src tests
-uv run --group dev ruff format --check src tests
-uv run --group dev pre-commit install
-uv run --group dev pre-commit run --all-files
-```
+- `chat_contract.py` owns the OpenAI-facing chat subset: validation, text/image message conversion, history item construction, completion payloads, streaming chunks, SSE framing, and OpenAI-style errors.
+- `responses_contract.py` owns the OpenAI-facing Responses subset: validation, text-only message input conversion, response payloads, usage mapping, and explicit unsupported-feature errors.
+- `_app_server_stdio_session.py` owns the Codex app-server stdio transport: JSON-RPC request correlation, notification fan-out, stderr redaction, shutdown, and denial responses for privileged app-server requests.
+- `_codex_turn_lifecycle.py` owns Codex turn behavior: starting turns, collecting final assistant output, streaming assistant deltas, draining idle notifications, and mapping token usage.
+- `codex_client.py` is the high-level client used by FastAPI. It initializes the app-server session, lists models, starts ephemeral read-only Codex threads, injects prior text/image history, materializes image data URLs for live turns, delegates turn execution, and unsubscribes when finished.
+
+## Protocol Artifacts
 
 Codex app-server protocol references are intentionally not committed. Regenerate them locally when needed:
 
